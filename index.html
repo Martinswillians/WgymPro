@@ -2047,7 +2047,8 @@ self.addEventListener('message', e => {
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
     import {
       getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
-      signOut, onAuthStateChanged, updateProfile
+      signOut, onAuthStateChanged, updateProfile, updatePassword,
+      reauthenticateWithCredential, EmailAuthProvider
     } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
     import {
       getFirestore, doc, setDoc, getDoc, collection, getDocs,
@@ -2088,7 +2089,26 @@ self.addEventListener('message', e => {
       getDoc: (ref) => getDoc(ref),
       collectionRef: (...path) => collection(fbDb, ...path),
       getDocs: (ref) => getDocs(ref),
-      serverTimestamp: () => serverTimestamp()
+      serverTimestamp: () => serverTimestamp(),
+      // Change-password support: Firebase requires a recent login before
+      // letting you change the password. If the session is "old", it throws
+      // auth/requires-recent-login — so we reauthenticate with the current
+      // password first, then retry the password change.
+      changePassword: async (currentPassword, newPassword) => {
+        const user = fbAuth.currentUser;
+        if (!user) throw new Error('no-current-user');
+        try {
+          await updatePassword(user, newPassword);
+        } catch (e) {
+          if (e.code === 'auth/requires-recent-login') {
+            const credential = EmailAuthProvider.credential(user.email, currentPassword);
+            await reauthenticateWithCredential(user, credential);
+            await updatePassword(user, newPassword);
+          } else {
+            throw e;
+          }
+        }
+      }
     };
 
     // Let the rest of the app know Firebase is ready to use
@@ -2723,6 +2743,13 @@ self.addEventListener('message', e => {
       <div id="imcPreview" style="display:none;" class="imc-value-display">
         <div class="imc-num" id="imcPreviewNum">—</div>
         <div class="imc-cat" id="imcPreviewCat">IMC</div>
+      </div>
+      <div class="profile-edit-row">
+        <div class="form-group" style="position:relative;">
+          <label class="form-label">Senha atual</label>
+          <input class="form-input form-input-left" type="password" id="editProfileCurrentPass" placeholder="Necessária p/ trocar senha" autocomplete="current-password">
+          <button class="pass-toggle" onclick="togglePassVis('editProfileCurrentPass')" type="button">👁</button>
+        </div>
       </div>
       <div class="profile-edit-row">
         <div class="form-group" style="position:relative;">
@@ -4172,7 +4199,7 @@ function openProfileEdit() {
   if (!currentAccount) return;
   const nameEl = document.getElementById('editProfileName');
   if (nameEl) nameEl.value = currentAccount.name || '';
-  ['editProfilePass','editProfileConfirm'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+  ['editProfilePass','editProfileConfirm','editProfileCurrentPass'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   // Pre-fill height and weight
   const hEl = document.getElementById('editProfileHeight');
   const wEl = document.getElementById('editProfileWeight');
@@ -4203,22 +4230,50 @@ function togglePassVis(inputId) {
   inp.type = inp.type === 'password' ? 'text' : 'password';
 }
 
-function saveProfileEdits() {
+async function saveProfileEdits() {
   if (!currentAccount || currentAccount.guest) { showToast('Visitante não pode editar perfil'); return; }
-  const name    = (document.getElementById('editProfileName')?.value || '').trim();
-  const pass    = document.getElementById('editProfilePass')?.value || '';
-  const confirm = document.getElementById('editProfileConfirm')?.value || '';
-  const height  = parseFloat(document.getElementById('editProfileHeight')?.value) || 0;
-  const weight  = parseFloat(document.getElementById('editProfileWeight')?.value) || 0;
+  const name        = (document.getElementById('editProfileName')?.value || '').trim();
+  const currentPass = document.getElementById('editProfileCurrentPass')?.value || '';
+  const pass         = document.getElementById('editProfilePass')?.value || '';
+  const confirm       = document.getElementById('editProfileConfirm')?.value || '';
+  const height       = parseFloat(document.getElementById('editProfileHeight')?.value) || 0;
+  const weight       = parseFloat(document.getElementById('editProfileWeight')?.value) || 0;
 
   if (!name) { showToast('⚠️ Digite seu nome'); return; }
   if (pass && pass.length < 6) { showToast('⚠️ Senha mínimo 6 caracteres'); return; }
   if (pass && pass !== confirm) { showToast('⚠️ Senhas não coincidem'); return; }
+  if (pass && currentAccount.cloud && !currentPass) { showToast('⚠️ Digite sua senha atual para trocar a senha'); return; }
+
+  const saveBtn = document.querySelector('.profile-save-btn');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Salvando...'; }
+
+  // For cloud accounts, the password lives in Firebase Auth, not in our
+  // local passwordHash. Change it there first so a wrong "current password"
+  // blocks the save before anything else is touched.
+  if (pass && currentAccount.cloud) {
+    if (!_fbReady || !navigator.onLine) {
+      showToast('⚠️ Sem conexão — conecte-se à internet para trocar a senha');
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '💾 Salvar Alterações'; }
+      return;
+    }
+    try {
+      await window.FB.changePassword(currentPass, pass);
+    } catch (e) {
+      const msg = (e && (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential'))
+        ? '⚠️ Senha atual incorreta'
+        : '⚠️ Não foi possível trocar a senha. Tente novamente.';
+      showToast(msg);
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '💾 Salvar Alterações'; }
+      return;
+    }
+  }
 
   const acc = accounts.find(a => a.id === currentAccount.id);
   if (acc) {
     acc.name = name;
-    if (pass) acc.passwordHash = simpleHash(pass);
+    // Local-only accounts still use the local hash; cloud accounts already
+    // had their real password changed above, so we don't store it locally.
+    if (pass && !acc.cloud) acc.passwordHash = simpleHash(pass);
     if (height > 0) acc.height = height;
     if (weight > 0) {
       if (!acc.weightHistory) acc.weightHistory = [];
@@ -4238,6 +4293,7 @@ function saveProfileEdits() {
   renderIMCCard();
   updateHeaderUser();
   updateGreeting();
+  if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '💾 Salvar Alterações'; }
   showToast(pass ? '✅ Perfil e senha atualizados!' : '✅ Perfil atualizado!');
   setTimeout(() => { closeProfileEdit(); renderSettings(); }, 800);
 }
