@@ -4495,48 +4495,48 @@ function linkAccountToAthlete() {
   // When logging in, link account to first matching athlete (or create one as P1)
   if (!currentAccount || currentAccount.guest) return;
   migrateUsers();
-  const active = getActiveUsers();
+  let active = getActiveUsers();
 
   // Find exact match by accountId first, then by name
   let match = active.find(u => u.accountId === currentAccount.id);
-  if (!match) match = active.find(u => u.name.toLowerCase() === currentAccount.name.toLowerCase());
+  if (!match) match = active.find(u => !u.accountId && u.name.toLowerCase() === currentAccount.name.toLowerCase());
 
   if (match) {
-    // Link and auto-select
     match.accountId = currentAccount.id;
-    saveUsers();
-    state.activeUserId = match.id;
-    state.p1name = match.name;
-    state.activeP1Id = match.id;
   } else {
-    // No athlete found — create one automatically as P1 (slot 0 = first position)
-    const newAthlete = {
+    // No athlete found — create one linked to this account
+    match = {
       id: 'athlete_' + currentAccount.id,
       accountId: currentAccount.id,
-      slotIndex: 0,
       name: currentAccount.name,
       avatar: currentAccount.avatar || '🏋️',
       createdAt: new Date().toISOString()
     };
-    // Insert at position 0 if no athletes, else prepend only if no P1 with accountId
-    if (!active.length) {
-      users.push(newAthlete);
-    } else {
-      // Check if slot 0 already has an athlete without an account link — don't overwrite
-      const hasLinkedP1 = active.find(u => u.accountId);
-      if (!hasLinkedP1) {
-        // Add as first athlete so they become P1
-        users.unshift(newAthlete);
-      } else {
-        // Already has a linked P1, just add to end
-        users.push(newAthlete);
-      }
-    }
-    saveUsers();
-    state.activeUserId = newAthlete.id;
-    state.p1name = newAthlete.name;
-    state.activeP1Id = newAthlete.id;
-    showToast('🏋️ ' + newAthlete.name + ' cadastrado como P1!');
+    users.push(match);
+    showToast('🏋️ ' + match.name + ' cadastrado como P1!');
+  }
+
+  // Hard rule: the athlete linked to the logged-in account is always P1
+  // (slot 0). Move it to the front of the array if it isn't there already,
+  // so "P1" — which the UI derives purely from array position — always
+  // matches the person who's actually logged in, regardless of the order
+  // athletes were created or edited in.
+  enforceLoggedInAccountAsP1();
+  saveUsers();
+
+  state.activeUserId = match.id;
+  state.p1name = match.name;
+  state.activeP1Id = match.id;
+}
+
+// Re-sorts `users` so the athlete linked to currentAccount.id is always at
+// index 0. Pure reordering — doesn't rename, delete, or alter any athlete.
+function enforceLoggedInAccountAsP1() {
+  if (!currentAccount || currentAccount.guest) return;
+  const idx = users.findIndex(u => u && u.accountId === currentAccount.id);
+  if (idx > 0) {
+    const [linked] = users.splice(idx, 1);
+    users.unshift(linked);
   }
 }
 
