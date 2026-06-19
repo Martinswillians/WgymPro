@@ -10525,18 +10525,7 @@ async function generateCodeChallenge(verifier) {
 async function spotifyLogin() {
   const clientId = getSpotifyClientId();
   if (!clientId) { showToast('⚠️ Configure o Client ID primeiro'); return; }
-
-  // Open the tab synchronously, as the very first thing, while we're still
-  // inside the user's click/tap event. Mobile browsers only allow
-  // window.open() without it being treated as a blocked popup when it's
-  // called directly from a user gesture — any `await` before this point
-  // (even a fast crypto.subtle call) can make the browser stop trusting it
-  // as "from the user" and block it. We fill in the real URL once it's ready.
-  let popupWin = null;
-  if (_isMobileBrowser()) {
-    try { popupWin = window.open('about:blank', '_blank'); } catch(e) { popupWin = null; }
-  }
-
+  
   const verifier = await generateCodeVerifier();
   const challenge = await generateCodeChallenge(verifier);
   localStorage.setItem('spotify_code_verifier', verifier);
@@ -10558,27 +10547,7 @@ async function spotifyLogin() {
     code_challenge: challenge,
     state: 'wgym_auth'
   });
-  const authUrl = 'https://accounts.spotify.com/authorize?' + params.toString();
-
-  // On iOS/Android, the Spotify app registers as a Universal/App Link handler
-  // for accounts.spotify.com. A plain navigation (location.href / a normal
-  // link tap) can get intercepted by the native app instead of showing the
-  // OAuth web login — the app just opens to its home screen and the PKCE
-  // flow never completes. A separate tab avoids that on Safari; Chrome
-  // mobile tends to block that popup instead, so we check whether our
-  // earlier window.open() actually succeeded and fall back to same-tab
-  // navigation (the path that already worked before) if not.
-  if (_isMobileBrowser()) {
-    const popupBlocked = !popupWin || popupWin.closed || typeof popupWin.closed === 'undefined';
-    if (popupBlocked) {
-      try { if (popupWin) popupWin.close(); } catch(e) {}
-      window.location.href = authUrl;
-    } else {
-      popupWin.location.href = authUrl;
-    }
-  } else {
-    window.location.href = authUrl;
-  }
+  window.location.href = 'https://accounts.spotify.com/authorize?' + params.toString();
 }
 
 async function handleSpotifyCallback() {
@@ -10623,30 +10592,11 @@ async function handleSpotifyCallback() {
       renderSpotifyUI();
       initSpotifySDK();
       loadSpotifyUserProfile();
-      _closeCallbackTabIfPopup();
     } else {
       showToast('❌ Erro: ' + (data.error_description || 'Falha no login'));
-      _closeCallbackTabIfPopup();
     }
   } catch(e) {
     showToast('❌ Erro ao conectar: ' + e.message);
-    _closeCallbackTabIfPopup();
-  }
-}
-
-// When spotifyLogin() opened the Spotify auth flow in a separate tab
-// (mobile fallback to avoid app-link interception), this tab is just a
-// disposable callback receiver — the person was actually using the app in
-// the original tab. Close this one and bring focus back to that original
-// tab once the token exchange is done.
-function _closeCallbackTabIfPopup() {
-  if (window.opener && !window.opener.closed) {
-    // localStorage writes fire a 'storage' event in OTHER tabs of the same
-    // origin — this is what lets the original tab know login finished
-    // without polling, even though execution happened in this separate tab.
-    try { localStorage.setItem('wgym_spotify_login_ping', String(Date.now())); } catch(e) {}
-    try { window.opener.focus(); } catch(e) {}
-    setTimeout(() => { try { window.close(); } catch(e) {} }, 1200);
   }
 }
 
@@ -11009,19 +10959,6 @@ if (!localStorage.getItem('wgym_spotify_client_id')) {
 if (new URLSearchParams(window.location.search).get('state') === 'wgym_auth') {
   handleSpotifyCallback();
 }
-
-// If the mobile login flow opened Spotify auth in a separate tab (to avoid
-// the Spotify app intercepting accounts.spotify.com), that tab pings this
-// one via localStorage once the token exchange finishes. Pick that up here
-// so the original tab's UI updates without the person needing to switch
-// tabs manually.
-window.addEventListener('storage', (e) => {
-  if (e.key === 'wgym_spotify_login_ping') {
-    renderSpotifyUI();
-    initSpotifySDK();
-    loadSpotifyUserProfile();
-  }
-});
 
 if (currentAccount) {
   document.getElementById('authScreen').classList.add('hidden');
