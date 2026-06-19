@@ -10525,7 +10525,18 @@ async function generateCodeChallenge(verifier) {
 async function spotifyLogin() {
   const clientId = getSpotifyClientId();
   if (!clientId) { showToast('⚠️ Configure o Client ID primeiro'); return; }
-  
+
+  // Open the tab synchronously, as the very first thing, while we're still
+  // inside the user's click/tap event. Mobile browsers only allow
+  // window.open() without it being treated as a blocked popup when it's
+  // called directly from a user gesture — any `await` before this point
+  // (even a fast crypto.subtle call) can make the browser stop trusting it
+  // as "from the user" and block it. We fill in the real URL once it's ready.
+  let popupWin = null;
+  if (_isMobileBrowser()) {
+    try { popupWin = window.open('about:blank', '_blank'); } catch(e) { popupWin = null; }
+  }
+
   const verifier = await generateCodeVerifier();
   const challenge = await generateCodeChallenge(verifier);
   localStorage.setItem('spotify_code_verifier', verifier);
@@ -10551,15 +10562,19 @@ async function spotifyLogin() {
 
   // On iOS/Android, the Spotify app registers as a Universal/App Link handler
   // for accounts.spotify.com. A plain navigation (location.href / a normal
-  // link tap) gets intercepted by the native app instead of showing the OAuth
-  // web login — the app just opens to its home screen and the PKCE flow never
-  // completes. Using window.open() in a new context, with a same-page
-  // fallback, avoids that interception on most mobile browsers.
+  // link tap) can get intercepted by the native app instead of showing the
+  // OAuth web login — the app just opens to its home screen and the PKCE
+  // flow never completes. A separate tab avoids that on Safari; Chrome
+  // mobile tends to block that popup instead, so we check whether our
+  // earlier window.open() actually succeeded and fall back to same-tab
+  // navigation (the path that already worked before) if not.
   if (_isMobileBrowser()) {
-    const win = window.open(authUrl, '_blank');
-    if (!win) {
-      // Popup blocked — fall back to normal navigation as last resort.
+    const popupBlocked = !popupWin || popupWin.closed || typeof popupWin.closed === 'undefined';
+    if (popupBlocked) {
+      try { if (popupWin) popupWin.close(); } catch(e) {}
       window.location.href = authUrl;
+    } else {
+      popupWin.location.href = authUrl;
     }
   } else {
     window.location.href = authUrl;
