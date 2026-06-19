@@ -10689,13 +10689,9 @@ function createSpotifyPlayer() {
     localStorage.setItem('spotify_device_id', device_id);
     showToast('🎵 Spotify Player pronto!');
     renderSpotifyUI();
-    // On mobile browsers the very first playback command must come from a
-    // direct user gesture (tap). activateElement() "primes" the player for
-    // that, so when the user taps Play the browser doesn't treat it as
-    // autoplay and block it. On desktop this is a no-op.
-    if (_isMobileBrowser()) {
-      _spotifyPlayer.activateElement().catch(() => {});
-    }
+    // Transfer playback to this device so play/pause/next/prev have something to control.
+    // Without this, the SDK has no active session and getCurrentState() returns null,
+    // which makes togglePlay()/nextTrack()/previousTrack() silently do nothing.
     transferPlaybackHere(false);
   });
   _spotifyPlayer.addListener('player_state_changed', state => {
@@ -10704,26 +10700,7 @@ function createSpotifyPlayer() {
   _spotifyPlayer.addListener('not_ready', () => { _spotifyDeviceId = null; });
   _spotifyPlayer.addListener('authentication_error', () => { showToast('⚠️ Erro de autenticação no Spotify'); });
   _spotifyPlayer.addListener('account_error', () => { showToast('⚠️ Conta Spotify Premium é necessária para controle total'); });
-  // Mobile browsers fire this when the user tries to play but the browser
-  // autoplay policy blocks it. We prompt the user to tap Play again — that
-  // user gesture is enough to unlock playback.
-  _spotifyPlayer.addListener('autoplay_failed', () => {
-    showToast('🎵 Toque em ▶ para iniciar a reprodução');
-    // Re-activate on next user tap so the NEXT play attempt succeeds.
-    const reactivate = () => {
-      _spotifyPlayer.activateElement().catch(() => {});
-      document.removeEventListener('touchstart', reactivate);
-      document.removeEventListener('click', reactivate);
-    };
-    document.addEventListener('touchstart', reactivate, { once: true });
-    document.addEventListener('click', reactivate, { once: true });
-  });
   _spotifyPlayer.connect();
-}
-
-// Simple mobile detection used to conditionally call activateElement().
-function _isMobileBrowser() {
-  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 }
 
 // Transfer playback to the in-app Web Playback SDK device.
@@ -10781,14 +10758,10 @@ function startPlaybackPolling() {
 // instead of failing silently.
 async function spotifyPlayPause() {
   if (_spotifyPlayer) {
-    // On mobile, the first playback command must be preceded by activateElement()
-    // called from within a user gesture (this tap IS that gesture). Without this
-    // iOS/Android treats it as autoplay and blocks the audio.
-    if (_isMobileBrowser()) {
-      try { await _spotifyPlayer.activateElement(); } catch(e) {}
-    }
     const state = await _spotifyPlayer.getCurrentState();
     if (!state) {
+      // No active session on this device yet — activate it, then ask the
+      // person to hit play on a track/playlist below.
       const ok = await transferPlaybackHere(true);
       if (ok) { showToast('🎵 Player ativado — escolha uma playlist abaixo'); setTimeout(startPlaybackPolling, 800); }
       else showToast('⚠️ Abra uma playlist do Spotify primeiro');
@@ -10867,11 +10840,6 @@ async function playSpotifyContext(uri, name) {
     showToast('⚠️ Abrindo no Spotify app...');
     window.open('spotify:' + uri.replace(':', '/').replace('spotify/', ''), '_blank');
     return;
-  }
-  // On mobile the play command must come from a direct user gesture.
-  // activateElement() called here (inside the tap handler) satisfies that.
-  if (_spotifyPlayer && _isMobileBrowser()) {
-    try { await _spotifyPlayer.activateElement(); } catch(e) {}
   }
   _spotifyCurrentContextUri = uri;
   const result = await spotifyAPI('/me/player/play', 'PUT', { context_uri: uri, device_id: deviceId });
