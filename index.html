@@ -1989,56 +1989,27 @@ select.form-input option { background: var(--card2); color: var(--text); }
 .spotify-client-id-setup input:focus { border-color: #1DB954; }
 </style>
 
-  <!-- Service Worker registration via Blob URL (works for local HTML files) -->
+  <!-- Service Worker cleanup — see note below -->
   <script>
   (function() {
     if (!('serviceWorker' in navigator)) return;
-    const SW_CODE = `
-const CACHE = 'wgym-v1';
-const ASSETS = []; // dynamic — we cache on fetch
-
-self.addEventListener('install', e => { self.skipWaiting(); });
-self.addEventListener('activate', e => { e.waitUntil(self.clients.claim()); });
-
-self.addEventListener('fetch', e => {
-  // Only cache same-origin GET requests
-  if (e.request.method !== 'GET') return;
-  e.respondWith(
-    caches.match(e.request).then(cached => {
-      if (cached) return cached;
-      return fetch(e.request).then(resp => {
-        if (!resp || resp.status !== 200 || resp.type === 'opaque') return resp;
-        const clone = resp.clone();
-        caches.open(CACHE).then(cache => cache.put(e.request, clone));
-        return resp;
-      }).catch(() => cached || new Response('Offline', {status: 503}));
-    })
-  );
-});
-
-self.addEventListener('message', e => {
-  if (e.data && e.data.type === 'SCHEDULE_NOTIF') {
-    // Notifications handled by main thread
-  }
-});
-`;
-    try {
-      const blob = new Blob([SW_CODE], {type: 'application/javascript'});
-      const swUrl = URL.createObjectURL(blob);
-      navigator.serviceWorker.register(swUrl, {scope: './'})
-        .then(reg => {
-          console.log('[WGym] Service Worker registered');
-          // Cache current page
-          if (caches && reg.active) {
-            caches.open('wgym-v1').then(c => c.add(window.location.href)).catch(()=>{});
-          }
-        })
-        .catch(e => console.warn('[WGym] SW registration failed:', e));
-    } catch(e) {
-      console.warn('[WGym] SW blob failed:', e);
-    }
+    // NOTE: Service Workers cannot be registered from a blob: URL in any
+    // modern browser (it's a spec-level same-origin restriction) — every
+    // previous attempt to do so here always failed silently into a .catch.
+    // The real risk is a Service Worker registered by an OLDER version of
+    // this app (before this was understood) still being active in the
+    // person's browser, controlling fetches/navigation for this origin —
+    // which can produce exactly the kind of unexpected blank pages / 404s
+    // seen when logging in. We actively unregister any such leftover SW
+    // here instead of trying (and failing) to register a new blob one.
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      regs.forEach(reg => {
+        reg.unregister().then(() => console.log('[WGym] Removed stale Service Worker:', reg.scope));
+      });
+    }).catch(() => {});
   })();
   </script>
+
 
   <!-- ══════════════════════════════════════════════════════ -->
   <!-- FIREBASE SDK — Auth + Firestore (modular, via CDN)      -->
@@ -9132,35 +9103,12 @@ function installPWA() {
   });
 }
 
-// Register inline Service Worker for offline + notification support
-(function registerSW() {
-  if (!('serviceWorker' in navigator)) return;
-  const swCode = `
-    const CACHE = 'willgym-v1';
-    self.addEventListener('install', e => {
-      e.waitUntil(caches.open(CACHE).then(c => c.addAll(['./', './index.html'])).catch(()=>{}));
-      self.skipWaiting();
-    });
-    self.addEventListener('activate', e => { e.waitUntil(self.clients.claim()); });
-    self.addEventListener('fetch', e => {
-      e.respondWith(caches.match(e.request).then(r => r || fetch(e.request).catch(() => new Response('Offline'))));
-    });
-    self.addEventListener('message', e => {
-      if (e.data && e.data.type === 'SCHEDULE_NOTIF') {
-        const s = e.data.settings;
-        self.registration.showNotification('Will Gym 🏋️', {
-          body: 'Hora do treino! Não falte hoje 💪',
-          icon: '/favicon.ico',
-          badge: '/favicon.ico',
-          tag: 'willgym-reminder'
-        });
-      }
-    });
-  `;
-  const blob = new Blob([swCode], { type: 'application/javascript' });
-  const swUrl = URL.createObjectURL(blob);
-  navigator.serviceWorker.register(swUrl).catch(() => {});
-})();
+// NOTE: a previous Service Worker registration attempt was removed from
+// here. Blob-based SW registration always fails (browsers require a real
+// same-origin URL for Service Workers), and a leftover/failed registration
+// was the likely cause of an intermittent navigation bug on login. Push
+// notification scheduling already has a working setInterval-based fallback
+// in scheduleNotifications() below that doesn't depend on a Service Worker.
 
 // ═══════════════════════════════════════════════════════
 // PLANOS PAGE — RENDER ALL
@@ -10525,7 +10473,18 @@ async function generateCodeChallenge(verifier) {
 async function spotifyLogin() {
   const clientId = getSpotifyClientId();
   if (!clientId) { showToast('⚠️ Configure o Client ID primeiro'); return; }
-  
+
+  // Open the tab synchronously, as the very first thing, while we're still
+  // inside the user's click/tap event. Mobile browsers only allow
+  // window.open() without it being treated as a blocked popup when it's
+  // called directly from a user gesture — any `await` before this point
+  // (even a fast crypto.subtle call) can make the browser stop trusting it
+  // as "from the user" and block it. We fill in the real URL once it's ready.
+  let popupWin = null;
+  if (_isMobileBrowser()) {
+    try { popupWin = window.open('about:blank', '_blank'); } catch(e) { popupWin = null; }
+  }
+
   const verifier = await generateCodeVerifier();
   const challenge = await generateCodeChallenge(verifier);
   localStorage.setItem('spotify_code_verifier', verifier);
@@ -10547,7 +10506,27 @@ async function spotifyLogin() {
     code_challenge: challenge,
     state: 'wgym_auth'
   });
-  window.location.href = 'https://accounts.spotify.com/authorize?' + params.toString();
+  const authUrl = 'https://accounts.spotify.com/authorize?' + params.toString();
+
+  // On iOS/Android, the Spotify app registers as a Universal/App Link handler
+  // for accounts.spotify.com. A plain navigation (location.href / a normal
+  // link tap) can get intercepted by the native app instead of showing the
+  // OAuth web login — the app just opens to its home screen and the PKCE
+  // flow never completes. A separate tab avoids that on Safari; Chrome
+  // mobile tends to block that popup instead, so we check whether our
+  // earlier window.open() actually succeeded and fall back to same-tab
+  // navigation (the path that already worked before) if not.
+  if (_isMobileBrowser()) {
+    const popupBlocked = !popupWin || popupWin.closed || typeof popupWin.closed === 'undefined';
+    if (popupBlocked) {
+      try { if (popupWin) popupWin.close(); } catch(e) {}
+      window.location.href = authUrl;
+    } else {
+      popupWin.location.href = authUrl;
+    }
+  } else {
+    window.location.href = authUrl;
+  }
 }
 
 async function handleSpotifyCallback() {
@@ -10592,11 +10571,30 @@ async function handleSpotifyCallback() {
       renderSpotifyUI();
       initSpotifySDK();
       loadSpotifyUserProfile();
+      _closeCallbackTabIfPopup();
     } else {
       showToast('❌ Erro: ' + (data.error_description || 'Falha no login'));
+      _closeCallbackTabIfPopup();
     }
   } catch(e) {
     showToast('❌ Erro ao conectar: ' + e.message);
+    _closeCallbackTabIfPopup();
+  }
+}
+
+// When spotifyLogin() opened the Spotify auth flow in a separate tab
+// (mobile fallback to avoid app-link interception), this tab is just a
+// disposable callback receiver — the person was actually using the app in
+// the original tab. Close this one and bring focus back to that original
+// tab once the token exchange is done.
+function _closeCallbackTabIfPopup() {
+  if (window.opener && !window.opener.closed) {
+    // localStorage writes fire a 'storage' event in OTHER tabs of the same
+    // origin — this is what lets the original tab know login finished
+    // without polling, even though execution happened in this separate tab.
+    try { localStorage.setItem('wgym_spotify_login_ping', String(Date.now())); } catch(e) {}
+    try { window.opener.focus(); } catch(e) {}
+    setTimeout(() => { try { window.close(); } catch(e) {} }, 1200);
   }
 }
 
@@ -10689,9 +10687,13 @@ function createSpotifyPlayer() {
     localStorage.setItem('spotify_device_id', device_id);
     showToast('🎵 Spotify Player pronto!');
     renderSpotifyUI();
-    // Transfer playback to this device so play/pause/next/prev have something to control.
-    // Without this, the SDK has no active session and getCurrentState() returns null,
-    // which makes togglePlay()/nextTrack()/previousTrack() silently do nothing.
+    // On mobile browsers the very first playback command must come from a
+    // direct user gesture (tap). activateElement() "primes" the player for
+    // that, so when the user taps Play the browser doesn't treat it as
+    // autoplay and block it. On desktop this is a no-op.
+    if (_isMobileBrowser()) {
+      _spotifyPlayer.activateElement().catch(() => {});
+    }
     transferPlaybackHere(false);
   });
   _spotifyPlayer.addListener('player_state_changed', state => {
@@ -10700,7 +10702,26 @@ function createSpotifyPlayer() {
   _spotifyPlayer.addListener('not_ready', () => { _spotifyDeviceId = null; });
   _spotifyPlayer.addListener('authentication_error', () => { showToast('⚠️ Erro de autenticação no Spotify'); });
   _spotifyPlayer.addListener('account_error', () => { showToast('⚠️ Conta Spotify Premium é necessária para controle total'); });
+  // Mobile browsers fire this when the user tries to play but the browser
+  // autoplay policy blocks it. We prompt the user to tap Play again — that
+  // user gesture is enough to unlock playback.
+  _spotifyPlayer.addListener('autoplay_failed', () => {
+    showToast('🎵 Toque em ▶ para iniciar a reprodução');
+    // Re-activate on next user tap so the NEXT play attempt succeeds.
+    const reactivate = () => {
+      _spotifyPlayer.activateElement().catch(() => {});
+      document.removeEventListener('touchstart', reactivate);
+      document.removeEventListener('click', reactivate);
+    };
+    document.addEventListener('touchstart', reactivate, { once: true });
+    document.addEventListener('click', reactivate, { once: true });
+  });
   _spotifyPlayer.connect();
+}
+
+// Simple mobile detection used to conditionally call activateElement().
+function _isMobileBrowser() {
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 }
 
 // Transfer playback to the in-app Web Playback SDK device.
@@ -10758,10 +10779,14 @@ function startPlaybackPolling() {
 // instead of failing silently.
 async function spotifyPlayPause() {
   if (_spotifyPlayer) {
+    // On mobile, the first playback command must be preceded by activateElement()
+    // called from within a user gesture (this tap IS that gesture). Without this
+    // iOS/Android treats it as autoplay and blocks the audio.
+    if (_isMobileBrowser()) {
+      try { await _spotifyPlayer.activateElement(); } catch(e) {}
+    }
     const state = await _spotifyPlayer.getCurrentState();
     if (!state) {
-      // No active session on this device yet — activate it, then ask the
-      // person to hit play on a track/playlist below.
       const ok = await transferPlaybackHere(true);
       if (ok) { showToast('🎵 Player ativado — escolha uma playlist abaixo'); setTimeout(startPlaybackPolling, 800); }
       else showToast('⚠️ Abra uma playlist do Spotify primeiro');
@@ -10840,6 +10865,11 @@ async function playSpotifyContext(uri, name) {
     showToast('⚠️ Abrindo no Spotify app...');
     window.open('spotify:' + uri.replace(':', '/').replace('spotify/', ''), '_blank');
     return;
+  }
+  // On mobile the play command must come from a direct user gesture.
+  // activateElement() called here (inside the tap handler) satisfies that.
+  if (_spotifyPlayer && _isMobileBrowser()) {
+    try { await _spotifyPlayer.activateElement(); } catch(e) {}
   }
   _spotifyCurrentContextUri = uri;
   const result = await spotifyAPI('/me/player/play', 'PUT', { context_uri: uri, device_id: deviceId });
@@ -10927,6 +10957,19 @@ if (!localStorage.getItem('wgym_spotify_client_id')) {
 if (new URLSearchParams(window.location.search).get('state') === 'wgym_auth') {
   handleSpotifyCallback();
 }
+
+// If the mobile login flow opened Spotify auth in a separate tab (to avoid
+// the Spotify app intercepting accounts.spotify.com), that tab pings this
+// one via localStorage once the token exchange finishes. Pick that up here
+// so the original tab's UI updates without the person needing to switch
+// tabs manually.
+window.addEventListener('storage', (e) => {
+  if (e.key === 'wgym_spotify_login_ping') {
+    renderSpotifyUI();
+    initSpotifySDK();
+    loadSpotifyUserProfile();
+  }
+});
 
 if (currentAccount) {
   document.getElementById('authScreen').classList.add('hidden');
