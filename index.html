@@ -10547,7 +10547,23 @@ async function spotifyLogin() {
     code_challenge: challenge,
     state: 'wgym_auth'
   });
-  window.location.href = 'https://accounts.spotify.com/authorize?' + params.toString();
+  const authUrl = 'https://accounts.spotify.com/authorize?' + params.toString();
+
+  // On iOS/Android, the Spotify app registers as a Universal/App Link handler
+  // for accounts.spotify.com. A plain navigation (location.href / a normal
+  // link tap) gets intercepted by the native app instead of showing the OAuth
+  // web login — the app just opens to its home screen and the PKCE flow never
+  // completes. Using window.open() in a new context, with a same-page
+  // fallback, avoids that interception on most mobile browsers.
+  if (_isMobileBrowser()) {
+    const win = window.open(authUrl, '_blank');
+    if (!win) {
+      // Popup blocked — fall back to normal navigation as last resort.
+      window.location.href = authUrl;
+    }
+  } else {
+    window.location.href = authUrl;
+  }
 }
 
 async function handleSpotifyCallback() {
@@ -10592,11 +10608,30 @@ async function handleSpotifyCallback() {
       renderSpotifyUI();
       initSpotifySDK();
       loadSpotifyUserProfile();
+      _closeCallbackTabIfPopup();
     } else {
       showToast('❌ Erro: ' + (data.error_description || 'Falha no login'));
+      _closeCallbackTabIfPopup();
     }
   } catch(e) {
     showToast('❌ Erro ao conectar: ' + e.message);
+    _closeCallbackTabIfPopup();
+  }
+}
+
+// When spotifyLogin() opened the Spotify auth flow in a separate tab
+// (mobile fallback to avoid app-link interception), this tab is just a
+// disposable callback receiver — the person was actually using the app in
+// the original tab. Close this one and bring focus back to that original
+// tab once the token exchange is done.
+function _closeCallbackTabIfPopup() {
+  if (window.opener && !window.opener.closed) {
+    // localStorage writes fire a 'storage' event in OTHER tabs of the same
+    // origin — this is what lets the original tab know login finished
+    // without polling, even though execution happened in this separate tab.
+    try { localStorage.setItem('wgym_spotify_login_ping', String(Date.now())); } catch(e) {}
+    try { window.opener.focus(); } catch(e) {}
+    setTimeout(() => { try { window.close(); } catch(e) {} }, 1200);
   }
 }
 
@@ -10959,6 +10994,19 @@ if (!localStorage.getItem('wgym_spotify_client_id')) {
 if (new URLSearchParams(window.location.search).get('state') === 'wgym_auth') {
   handleSpotifyCallback();
 }
+
+// If the mobile login flow opened Spotify auth in a separate tab (to avoid
+// the Spotify app intercepting accounts.spotify.com), that tab pings this
+// one via localStorage once the token exchange finishes. Pick that up here
+// so the original tab's UI updates without the person needing to switch
+// tabs manually.
+window.addEventListener('storage', (e) => {
+  if (e.key === 'wgym_spotify_login_ping') {
+    renderSpotifyUI();
+    initSpotifySDK();
+    loadSpotifyUserProfile();
+  }
+});
 
 if (currentAccount) {
   document.getElementById('authScreen').classList.add('hidden');
