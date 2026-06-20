@@ -2014,76 +2014,103 @@ select.form-input option { background: var(--card2); color: var(--text); }
   <!-- ══════════════════════════════════════════════════════ -->
   <!-- FIREBASE SDK — Auth + Firestore (modular, via CDN)      -->
   <!-- ══════════════════════════════════════════════════════ -->
+  <script>
+    // Watchdog: if the Firebase module script below fails to load or throws
+    // before it can dispatch 'wgym-firebase-ready' (CDN blocked, network
+    // issue, browser without full ES module support, content blocker,
+    // restrictive mobile data-saver mode, etc.), this fires after a few
+    // seconds so the rest of the app — and the person — knows Firebase
+    // never came up, instead of silently falling back to "wrong password".
+    window._fbWatchdogTimer = setTimeout(() => {
+      if (!window._fbModuleLoaded) {
+        console.warn('[WGym] Firebase module did not signal ready within 6s — likely failed to load.');
+        window.dispatchEvent(new Event('wgym-firebase-load-failed'));
+      }
+    }, 6000);
+  </script>
   <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-    import {
-      getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
-      signOut, onAuthStateChanged, updateProfile, updatePassword,
-      reauthenticateWithCredential, EmailAuthProvider
-    } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-    import {
-      getFirestore, doc, setDoc, getDoc, collection, getDocs,
-      serverTimestamp, enableIndexedDbPersistence
-    } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+    window.addEventListener('error', () => {}); // no-op, placeholder for module scope
+    try {
+      const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js");
+      const {
+        getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+        signOut, onAuthStateChanged, updateProfile, updatePassword,
+        reauthenticateWithCredential, EmailAuthProvider
+      } = await import("https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js");
+      const {
+        getFirestore, doc, setDoc, getDoc, collection, getDocs,
+        serverTimestamp, enableIndexedDbPersistence
+      } = await import("https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js");
 
-    // Your web app's Firebase configuration (public keys — safe to expose client-side)
-    const firebaseConfig = {
-      apiKey: "AIzaSyBMavemSEjc0GuB34u_tuDLk-UiqSKGAqM",
-      authDomain: "will-gym-pro.firebaseapp.com",
-      projectId: "will-gym-pro",
-      storageBucket: "will-gym-pro.firebasestorage.app",
-      messagingSenderId: "595161216225",
-      appId: "1:595161216225:web:65cd1dcdc92cc2a1cf73a0"
-    };
+      // Your web app's Firebase configuration (public keys — safe to expose client-side)
+      const firebaseConfig = {
+        apiKey: "AIzaSyBMavemSEjc0GuB34u_tuDLk-UiqSKGAqM",
+        authDomain: "will-gym-pro.firebaseapp.com",
+        projectId: "will-gym-pro",
+        storageBucket: "will-gym-pro.firebasestorage.app",
+        messagingSenderId: "595161216225",
+        appId: "1:595161216225:web:65cd1dcdc92cc2a1cf73a0"
+      };
 
-    const fbApp = initializeApp(firebaseConfig);
-    const fbAuth = getAuth(fbApp);
-    const fbDb = getFirestore(fbApp);
+      const fbApp = initializeApp(firebaseConfig);
+      const fbAuth = getAuth(fbApp);
+      const fbDb = getFirestore(fbApp);
 
-    // Allow Firestore to keep working offline and sync automatically when back online
-    enableIndexedDbPersistence(fbDb).catch((e) => {
-      console.warn('[WGym] Firestore offline persistence not enabled:', e.code);
-    });
+      // Allow Firestore to keep working offline and sync automatically when back online
+      enableIndexedDbPersistence(fbDb).catch((e) => {
+        console.warn('[WGym] Firestore offline persistence not enabled:', e.code);
+      });
 
-    // Expose a minimal bridge on window so the rest of the app (classic <script>, non-module)
-    // can call Firebase without needing to be a module itself.
-    window.FB = {
-      auth: fbAuth,
-      db: fbDb,
-      createUserWithEmailAndPassword: (email, pass) => createUserWithEmailAndPassword(fbAuth, email, pass),
-      signInWithEmailAndPassword: (email, pass) => signInWithEmailAndPassword(fbAuth, email, pass),
-      signOut: () => signOut(fbAuth),
-      updateProfile: (user, data) => updateProfile(user, data),
-      onAuthStateChanged: (cb) => onAuthStateChanged(fbAuth, cb),
-      docRef: (...path) => doc(fbDb, ...path),
-      setDoc: (ref, data, opts) => setDoc(ref, data, opts || {}),
-      getDoc: (ref) => getDoc(ref),
-      collectionRef: (...path) => collection(fbDb, ...path),
-      getDocs: (ref) => getDocs(ref),
-      serverTimestamp: () => serverTimestamp(),
-      // Change-password support: Firebase requires a recent login before
-      // letting you change the password. If the session is "old", it throws
-      // auth/requires-recent-login — so we reauthenticate with the current
-      // password first, then retry the password change.
-      changePassword: async (currentPassword, newPassword) => {
-        const user = fbAuth.currentUser;
-        if (!user) throw new Error('no-current-user');
-        try {
-          await updatePassword(user, newPassword);
-        } catch (e) {
-          if (e.code === 'auth/requires-recent-login') {
-            const credential = EmailAuthProvider.credential(user.email, currentPassword);
-            await reauthenticateWithCredential(user, credential);
+      // Expose a minimal bridge on window so the rest of the app (classic <script>, non-module)
+      // can call Firebase without needing to be a module itself.
+      window.FB = {
+        auth: fbAuth,
+        db: fbDb,
+        createUserWithEmailAndPassword: (email, pass) => createUserWithEmailAndPassword(fbAuth, email, pass),
+        signInWithEmailAndPassword: (email, pass) => signInWithEmailAndPassword(fbAuth, email, pass),
+        signOut: () => signOut(fbAuth),
+        updateProfile: (user, data) => updateProfile(user, data),
+        onAuthStateChanged: (cb) => onAuthStateChanged(fbAuth, cb),
+        docRef: (...path) => doc(fbDb, ...path),
+        setDoc: (ref, data, opts) => setDoc(ref, data, opts || {}),
+        getDoc: (ref) => getDoc(ref),
+        collectionRef: (...path) => collection(fbDb, ...path),
+        getDocs: (ref) => getDocs(ref),
+        serverTimestamp: () => serverTimestamp(),
+        // Change-password support: Firebase requires a recent login before
+        // letting you change the password. If the session is "old", it throws
+        // auth/requires-recent-login — so we reauthenticate with the current
+        // password first, then retry the password change.
+        changePassword: async (currentPassword, newPassword) => {
+          const user = fbAuth.currentUser;
+          if (!user) throw new Error('no-current-user');
+          try {
             await updatePassword(user, newPassword);
-          } else {
-            throw e;
+          } catch (e) {
+            if (e.code === 'auth/requires-recent-login') {
+              const credential = EmailAuthProvider.credential(user.email, currentPassword);
+              await reauthenticateWithCredential(user, credential);
+              await updatePassword(user, newPassword);
+            } else {
+              throw e;
+            }
           }
         }
-      }
-    };
+      };
 
-    // Let the rest of the app know Firebase is ready to use
-    window.dispatchEvent(new Event('wgym-firebase-ready'));
+      window._fbModuleLoaded = true;
+      clearTimeout(window._fbWatchdogTimer);
+      // Let the rest of the app know Firebase is ready to use
+      window.dispatchEvent(new Event('wgym-firebase-ready'));
+    } catch (err) {
+      // This is the actual failure reason on mobile when imports get
+      // blocked/fail — surfaced instead of just silently never firing
+      // wgym-firebase-ready.
+      console.error('[WGym] Firebase module failed to initialize:', err);
+      window._fbModuleLoadError = (err && (err.message || String(err))) || 'unknown error';
+      clearTimeout(window._fbWatchdogTimer);
+      window.dispatchEvent(new Event('wgym-firebase-load-failed'));
+    }
   </script>
 </head>
 <body>
@@ -3388,6 +3415,7 @@ const CLOUD_SYNC_KEYS = [
 ];
 
 let _fbReady = false;
+let _fbLoadFailed = false;
 let _fbUser = null;
 let _cloudSyncEnabled = false;
 let _cloudPullInProgress = false;
@@ -3400,6 +3428,16 @@ window.addEventListener('wgym-firebase-ready', () => {
     _fbUser = user;
     _cloudSyncEnabled = !!user;
   });
+});
+
+// Fires if the Firebase module script failed to load/initialize entirely —
+// e.g. the gstatic.com CDN was blocked by a mobile carrier/data-saver mode,
+// a content blocker, or any network hiccup during that import. Without this,
+// the symptom on mobile is indistinguishable from "wrong password": every
+// login attempt for a cloud-only account just falls through and fails.
+window.addEventListener('wgym-firebase-load-failed', () => {
+  _fbLoadFailed = true;
+  console.warn('[WGym] Cloud login unavailable this session:', window._fbModuleLoadError || 'timeout');
 });
 
 // Debounced push: many local saves can happen in a burst (e.g. finishing a
@@ -3575,6 +3613,21 @@ async function doLogin() {
 
   // Try Firebase first — this is what makes login work from a brand new
   // device that has never seen this account locally before.
+  if (!_fbReady && !_fbLoadFailed && navigator.onLine) {
+    // The Firebase module script may still be loading (it's fetched from a
+    // CDN over the network). Give it a brief window before deciding it's
+    // actually unavailable, instead of immediately falling back to a local
+    // account check that's guaranteed to fail for cloud-only accounts.
+    await new Promise(r => setTimeout(r, 1500));
+  }
+
+  if (_fbLoadFailed) {
+    // We know for certain Firebase never initialized this session — almost
+    // always a network/CDN issue, common on mobile data connections. This
+    // is NOT the same as "wrong password" and saying so would be misleading.
+    showToast('⚠️ Não foi possível conectar ao servidor de login. Verifique sua internet e tente novamente.');
+  }
+
   if (_fbReady && navigator.onLine) {
     try {
       const cred = await window.FB.signInWithEmailAndPassword(email, pass);
