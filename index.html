@@ -3657,15 +3657,11 @@ async function doLogin() {
       // Wrong password / unknown email on Firebase — but this email might
       // still exist as an older local-only account, so fall through and
       // check that before giving up.
-      console.warn('[WGym] Firebase login error:', e && e.code, e && e.message);
       if (e && (e.code === 'auth/invalid-credential' || e.code === 'auth/user-not-found' || e.code === 'auth/wrong-password')) {
         const localAccount = accounts.find(a => a.email === email && a.passwordHash === simpleHash(pass));
         if (localAccount) { loginAccount(localAccount); if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Entrar →'; } return; }
-      } else if (e) {
-        // Any other Firebase error (network issue, too-many-requests, etc.)
-        // — surface it instead of silently falling through, so it's clear
-        // this isn't simply "wrong password".
-        showToast('⚠️ Firebase: ' + (e.code || e.message || 'erro desconhecido'));
+      } else if (e && e.code === 'auth/network-request-failed') {
+        showToast('⚠️ Sem conexão com a internet. Tente novamente.');
       }
     }
   }
