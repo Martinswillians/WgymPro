@@ -396,6 +396,21 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .ex-fav { font-size: 18px; cursor: pointer; padding: 2px; transition: transform 0.2s; flex-shrink: 0; }
 .ex-fav:active { transform: scale(1.3); }
 
+/* ── Swipe-to-reveal edit/delete on exercise rows ── */
+.ex-item-swipe-wrap { position: relative; overflow: hidden; border-radius: var(--radius-sm); }
+.ex-item-swipe-front { position: relative; z-index: 2; margin-bottom: 0; will-change: transform; }
+.ex-item-swipe-actions {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 90px;
+  display: flex; z-index: 1;
+}
+.ex-swipe-btn {
+  flex: 1; border: none; cursor: pointer; font-size: 18px;
+  display: flex; align-items: center; justify-content: center;
+  color: white;
+}
+.ex-swipe-edit { background: #3B82F6; }
+.ex-swipe-delete { background: var(--primary); }
+
 .add-ex-row { display: flex; gap: 8px; margin-top: 10px; position: relative; }
 .add-ex-input { flex: 1; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; font-family: var(--font-body); background: var(--bg2); color: var(--text); }
 .add-ex-input:focus { outline: none; border-color: var(--primary); }
@@ -3411,7 +3426,8 @@ try { const sid = localStorage.getItem('wgym_session'); if (sid) currentAccount 
 const CLOUD_SYNC_KEYS = [
   'wgym_users', 'wgym_history', 'wgym_settings', 'wgym_plans',
   'wgym_templates', 'wgym_custom_ex', 'wgym_custom_groups',
-  'wgym_favs', 'wgym_rest_defaults', 'wgym_notif', 'wgym_notif_time', 'wgym_notif_days'
+  'wgym_favs', 'wgym_rest_defaults', 'wgym_notif', 'wgym_notif_time', 'wgym_notif_days',
+  'wgym_hidden_ex', 'wgym_ex_aliases'
 ];
 
 let _fbReady = false;
@@ -3686,6 +3702,9 @@ function reloadLocalStateAfterCloudPull() {
   if (typeof trainingPlans !== 'undefined') { try { trainingPlans = JSON.parse(localStorage.getItem('wgym_plans') || '[]'); } catch(e) {} }
   if (typeof quickTemplates !== 'undefined') { try { quickTemplates = JSON.parse(localStorage.getItem('wgym_templates') || '[]'); } catch(e) {} }
   if (typeof notifSettings !== 'undefined') { try { notifSettings = { ...notifSettings, ...JSON.parse(localStorage.getItem('wgym_notif') || '{}') }; } catch(e) {} }
+  loadCustomEx();
+  loadHiddenEx();
+  loadExAliases();
 }
 
 function loginAsGuest() {
@@ -3757,6 +3776,8 @@ let state = {
   freeUserIds: [],    // list of user IDs for free workout (multi-select)
   sheetSelected: [],
   freeSelected: [], freeCustomExercises: [], customExByGroup: {},
+  hiddenEx: {},  // { groupName: [exerciseName, ...] } — standard exercises hidden from this user's view
+  exAliases: {}, // { groupName: { originalName: customDisplayName } } — per-user renames of standard exercises
   editingUserId: null, selectedAvatar: '🏋️',
   editingGroupId: null, selectedGroupIcon: '💪'
 };
@@ -4909,7 +4930,16 @@ function closeExSheet() {
 }
 
 function renderSheetExList() {
-  const exs = [...(EXERCISES[state.group]||[]), ...(state.customExByGroup[state.group]||[])];
+  const isCustom = ex => (state.customExByGroup[state.group]||[]).includes(ex);
+  const hidden = state.hiddenEx[state.group] || [];
+  const aliases = state.exAliases[state.group] || {};
+  // Hidden standard exercises are filtered out of this user's view entirely —
+  // they're never deleted from the shared EXERCISES catalog, just hidden
+  // per-account. Custom exercises the person added themselves can be hidden
+  // too if they choose "excluir" on them (handled as a real delete instead,
+  // see deleteExercise()).
+  const exs = [...(EXERCISES[state.group]||[]), ...(state.customExByGroup[state.group]||[])]
+    .filter(ex => !hidden.includes(ex));
   const done = state.completedEx[state.group]||[];
   const favs = getFavs();
   const selected = state.sheetSelected || [];
@@ -4927,6 +4957,7 @@ function renderSheetExList() {
     const isSel = selected.includes(ex);
     const isDone = done.includes(ex);
     const selIdx = selected.indexOf(ex); // 0-based position in queue
+    const displayName = aliases[ex] || ex; // alias is purely cosmetic — `ex` stays the real identity
 
     // Count how many times this exercise was done by this user
     const entries = uid
@@ -4944,17 +4975,43 @@ function renderSheetExList() {
       badge = `<div class="ex-check"></div>`;
     }
 
-    return `<div class="ex-item ${isSel?'sheet-selected':''} ${isDone?'done':''}" onclick="toggleSheetEx('${exS}')">
-      ${badge}
-      <div style="flex:1;min-width:0;">
-        <div class="ex-name" style="margin-bottom:${lastCount>0?'2px':'0'};">${ex}</div>
-        ${lastCount > 0 ? `<div style="font-size:10px;color:var(--muted);">${groupIcon} ${state.group} · <span style="color:var(--success);">${lastCount}× realizado</span></div>` : ''}
+    // Swipe-to-reveal wrapper: the visible row sits in .ex-item-swipe-front
+    // and slides left on swipe to reveal edit/delete buttons underneath in
+    // .ex-item-swipe-actions. See setupExSwipe() for the touch handling.
+    return `<div class="ex-item-swipe-wrap" data-ex="${exS}">
+      <div class="ex-item-swipe-actions">
+        <button class="ex-swipe-btn ex-swipe-edit" onclick="openEditExercise('${exS}', event)" title="Editar">✏️</button>
+        <button class="ex-swipe-btn ex-swipe-delete" onclick="confirmDeleteExercise('${exS}', event)" title="Excluir">🗑️</button>
       </div>
-      <span class="ex-last-load" style="flex-shrink:0;">${ll>0?ll+'kg':'—'}</span>
-      <span class="ex-fav" onclick="toggleFav('${exS}',event)">${favs.includes(ex)?'⭐':'☆'}</span>
+      <div class="ex-item ex-item-swipe-front ${isSel?'sheet-selected':''} ${isDone?'done':''}" onclick="toggleSheetEx('${exS}')">
+        ${badge}
+        <div style="flex:1;min-width:0;">
+          <div class="ex-name" style="margin-bottom:${lastCount>0?'2px':'0'};">${displayName}</div>
+          ${lastCount > 0 ? `<div style="font-size:10px;color:var(--muted);">${groupIcon} ${state.group} · <span style="color:var(--success);">${lastCount}× realizado</span></div>` : ''}
+        </div>
+        <span class="ex-last-load" style="flex-shrink:0;">${ll>0?ll+'kg':'—'}</span>
+        <span class="ex-fav" onclick="toggleFav('${exS}',event)">${favs.includes(ex)?'⭐':'☆'}</span>
+      </div>
     </div>`;
-  }).join('');
+  }).join('') + (hidden.length > 0 ? `
+    <div style="text-align:center;padding:10px;">
+      <span style="font-size:12px;color:var(--muted);text-decoration:underline;cursor:pointer;" onclick="showHiddenExList()">
+        👁️ ${hidden.length} exercício(s) oculto(s) — toque para ver
+      </span>
+    </div>` : '');
   document.getElementById('sheetExCount').textContent = exs.length;
+  setupExSwipe();
+}
+
+// Lets the person bring back standard exercises they'd previously hidden.
+function showHiddenExList() {
+  const hidden = state.hiddenEx[state.group] || [];
+  if (!hidden.length) return;
+  const names = hidden.map((ex, i) => `${i + 1}. ${ex}`).join('\n');
+  const choice = prompt('Exercícios ocultos neste grupo:\n\n' + names + '\n\nDigite o número do exercício para trazer de volta, ou cancele:');
+  if (!choice) return;
+  const idx = parseInt(choice, 10) - 1;
+  if (idx >= 0 && idx < hidden.length) unhideStandardExercise(state.group, hidden[idx]);
 }
 
 function toggleSheetEx(ex) {
@@ -4964,6 +5021,201 @@ function toggleSheetEx(ex) {
   else state.sheetSelected.push(ex);
   renderSheetExList();
   updateSheetStartBar();
+}
+
+// ── Swipe-to-reveal edit/delete on exercise rows ──
+// Each row is wrapped in .ex-item-swipe-wrap, with the visible content in
+// .ex-item-swipe-front (which translates left) and action buttons sitting
+// underneath in .ex-item-swipe-actions. We track touch start/move per row
+// and snap open/closed on release, closing any other open row first so
+// only one is ever revealed at a time.
+let _exSwipeOpenEl = null;
+function setupExSwipe() {
+  const wraps = document.querySelectorAll('#sheetExList .ex-item-swipe-wrap');
+  wraps.forEach(wrap => {
+    const front = wrap.querySelector('.ex-item-swipe-front');
+    if (!front) return;
+    let startX = 0, startY = 0, currentX = 0, dragging = false, isHorizontal = null;
+
+    front.addEventListener('touchstart', (e) => {
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      currentX = 0;
+      dragging = true;
+      isHorizontal = null;
+      front.style.transition = 'none';
+    }, { passive: true });
+
+    front.addEventListener('touchmove', (e) => {
+      if (!dragging) return;
+      const dx = e.touches[0].clientX - startX;
+      const dy = e.touches[0].clientY - startY;
+      if (isHorizontal === null) {
+        // Decide once per gesture whether this is a horizontal swipe or a
+        // vertical scroll, so we don't hijack normal list scrolling.
+        isHorizontal = Math.abs(dx) > Math.abs(dy);
+      }
+      if (!isHorizontal) return;
+      currentX = Math.max(-90, Math.min(0, dx));
+      front.style.transform = `translateX(${currentX}px)`;
+    }, { passive: true });
+
+    front.addEventListener('touchend', () => {
+      if (!dragging) return;
+      dragging = false;
+      front.style.transition = 'transform 0.2s ease';
+      if (currentX < -45) {
+        if (_exSwipeOpenEl && _exSwipeOpenEl !== front) _exSwipeOpenEl.style.transform = 'translateX(0)';
+        front.style.transform = 'translateX(-90px)';
+        _exSwipeOpenEl = front;
+      } else {
+        front.style.transform = 'translateX(0)';
+        if (_exSwipeOpenEl === front) _exSwipeOpenEl = null;
+      }
+    });
+  });
+}
+
+function closeExSwipe() {
+  if (_exSwipeOpenEl) { _exSwipeOpenEl.style.transform = 'translateX(0)'; _exSwipeOpenEl = null; }
+}
+
+// ── Edit exercise name ──
+// Custom exercises (added by the person) get their real name changed.
+// Standard exercises (from the shared EXERCISES catalog) get a per-account
+// display alias instead — the canonical name keeps being used internally
+// for history/favorites/etc, so nothing breaks for this or any other user.
+function openEditExercise(ex, event) {
+  if (event) event.stopPropagation();
+  closeExSwipe();
+  const isCustom = (state.customExByGroup[state.group]||[]).includes(ex);
+  const aliases = state.exAliases[state.group] || {};
+  const currentDisplay = aliases[ex] || ex;
+  const newName = prompt(isCustom ? 'Editar nome do exercício:' : 'Editar nome (apenas como você vê — o catálogo padrão não muda):', currentDisplay);
+  if (newName === null) return; // cancelled
+  const trimmed = newName.trim();
+  if (!trimmed) { showToast('⚠️ Nome não pode ser vazio'); return; }
+  if (trimmed === currentDisplay) return;
+
+  if (isCustom) {
+    // Real rename: update the custom exercise list, plus every place that
+    // referenced the old name by value, so history/favorites/etc keep working.
+    renameCustomExercise(ex, trimmed);
+  } else {
+    // Cosmetic alias only — `ex` keeps being the real identity everywhere else.
+    if (!state.exAliases[state.group]) state.exAliases[state.group] = {};
+    state.exAliases[state.group][ex] = trimmed;
+    saveExAliases();
+    renderSheetExList();
+    showToast('✅ Nome de exibição atualizado');
+  }
+}
+
+function renameCustomExercise(oldName, newName) {
+  const list = state.customExByGroup[state.group];
+  if (!list) return;
+  const idx = list.indexOf(oldName);
+  if (idx === -1) return;
+  list[idx] = newName;
+  saveCustomEx();
+
+  // Keep history, favorites, rest defaults and per-exercise notes pointing
+  // at the exercise under its new name, so nothing the person already
+  // logged becomes orphaned.
+  history.forEach(h => { if (h.exercise === oldName) h.exercise = newName; });
+  saveHistory();
+
+  const favs = getFavs();
+  const favIdx = favs.indexOf(oldName);
+  if (favIdx >= 0) { favs[favIdx] = newName; localStorage.setItem('wgym_favs', JSON.stringify(favs)); queueCloudSync('wgym_favs'); }
+
+  try {
+    const restMap = JSON.parse(localStorage.getItem('wgym_rest_defaults') || '{}');
+    if (restMap[oldName] !== undefined) { restMap[newName] = restMap[oldName]; delete restMap[oldName]; localStorage.setItem('wgym_rest_defaults', JSON.stringify(restMap)); queueCloudSync('wgym_rest_defaults'); }
+  } catch(e) {}
+
+  const oldNotes = localStorage.getItem('wgym_notes_' + oldName);
+  if (oldNotes !== null) { localStorage.setItem('wgym_notes_' + newName, oldNotes); localStorage.removeItem('wgym_notes_' + oldName); queueCloudSync('wgym_notes_' + newName); }
+
+  // Also update the exercise if it's currently mid-selection in this session
+  if (state.sheetSelected) {
+    const selIdx = state.sheetSelected.indexOf(oldName);
+    if (selIdx >= 0) state.sheetSelected[selIdx] = newName;
+  }
+
+  renderSheetExList();
+  showToast('✅ "' + oldName + '" renomeado para "' + newName + '"');
+}
+
+// ── Delete exercise ──
+// Custom exercises are removed for real (they're the person's own data).
+// Standard exercises from the shared catalog are hidden from this account's
+// view instead, never deleted from EXERCISES itself.
+function confirmDeleteExercise(ex, event) {
+  if (event) event.stopPropagation();
+  closeExSwipe();
+  const isCustom = (state.customExByGroup[state.group]||[]).includes(ex);
+  const aliases = state.exAliases[state.group] || {};
+  const displayName = aliases[ex] || ex;
+  const entries = history.filter(h => h.exercise === ex);
+  const warnHistory = entries.length > 0
+    ? `\n\n⚠️ Este exercício tem ${entries.length} registro(s) no histórico. ${isCustom ? 'O histórico será mantido, mas o exercício não poderá mais ser selecionado.' : ''}`
+    : '';
+  const msg = isCustom
+    ? `Excluir "${displayName}" definitivamente?${warnHistory}`
+    : `Ocultar "${displayName}" da sua lista? Você pode trazer de volta depois em Config → Grupos Musculares.${warnHistory}`;
+  if (!confirm(msg)) return;
+
+  if (isCustom) {
+    deleteCustomExercise(ex);
+  } else {
+    hideStandardExercise(ex);
+  }
+}
+
+function deleteCustomExercise(ex) {
+  const list = state.customExByGroup[state.group];
+  if (!list) return;
+  const idx = list.indexOf(ex);
+  if (idx === -1) return;
+  list.splice(idx, 1);
+  saveCustomEx();
+
+  // Remove from any in-progress selection so it can't stay "queued" after deletion
+  if (state.sheetSelected) {
+    const selIdx = state.sheetSelected.indexOf(ex);
+    if (selIdx >= 0) state.sheetSelected.splice(selIdx, 1);
+  }
+
+  renderSheetExList();
+  updateSheetStartBar();
+  showToast('🗑️ Exercício excluído');
+}
+
+function hideStandardExercise(ex) {
+  if (!state.hiddenEx[state.group]) state.hiddenEx[state.group] = [];
+  if (!state.hiddenEx[state.group].includes(ex)) state.hiddenEx[state.group].push(ex);
+  saveHiddenEx();
+
+  if (state.sheetSelected) {
+    const selIdx = state.sheetSelected.indexOf(ex);
+    if (selIdx >= 0) state.sheetSelected.splice(selIdx, 1);
+  }
+
+  renderSheetExList();
+  updateSheetStartBar();
+  showToast('👁️ Exercício ocultado da sua lista');
+}
+
+// Bring back a hidden standard exercise (used from Config → Grupos Musculares)
+function unhideStandardExercise(group, ex) {
+  if (!state.hiddenEx[group]) return;
+  const idx = state.hiddenEx[group].indexOf(ex);
+  if (idx === -1) return;
+  state.hiddenEx[group].splice(idx, 1);
+  saveHiddenEx();
+  renderSheetExList();
+  showToast('👁️ "' + ex + '" visível novamente');
 }
 
 function updateSheetStartBar() {
@@ -5435,6 +5687,16 @@ function addCustomEx() {
 
 function saveCustomEx() { localStorage.setItem('wgym_custom_ex', JSON.stringify(state.customExByGroup)); queueCloudSync('wgym_custom_ex'); }
 function loadCustomEx() { try { state.customExByGroup = JSON.parse(localStorage.getItem('wgym_custom_ex') || '{}'); } catch(e) {} }
+
+// Standard exercises (from the built-in EXERCISES catalog) can't be deleted
+// outright — that would affect the shared catalog for every device/user.
+// Instead each person can hide ones they don't use, and/or give them a
+// custom display name — both stored locally (and synced per-account via the
+// existing cloud sync), without touching the shared EXERCISES data.
+function saveHiddenEx() { localStorage.setItem('wgym_hidden_ex', JSON.stringify(state.hiddenEx)); queueCloudSync('wgym_hidden_ex'); }
+function loadHiddenEx() { try { state.hiddenEx = JSON.parse(localStorage.getItem('wgym_hidden_ex') || '{}'); } catch(e) {} }
+function saveExAliases() { localStorage.setItem('wgym_ex_aliases', JSON.stringify(state.exAliases)); queueCloudSync('wgym_ex_aliases'); }
+function loadExAliases() { try { state.exAliases = JSON.parse(localStorage.getItem('wgym_ex_aliases') || '{}'); } catch(e) {} }
 
 function getFavs() { try { return JSON.parse(localStorage.getItem('wgym_favs')||'[]'); } catch(e){return [];} }
 function toggleFav(ex,e) { e.stopPropagation(); const f=getFavs(), i=f.indexOf(ex); i>=0?f.splice(i,1):f.push(ex); localStorage.setItem('wgym_favs',JSON.stringify(f)); queueCloudSync('wgym_favs'); renderSheetExList(); showToast(i>=0?'Removido':'⭐ Favoritado!'); }
@@ -10995,6 +11257,8 @@ function loadCustomSpotify() {
 // INIT
 // ═══════════════════════════════════════════════════════
 loadCustomEx();
+loadHiddenEx();
+loadExAliases();
 normalizeSlots();
 applyTheme(settings.theme);
 renderRegEmojiGrid();
