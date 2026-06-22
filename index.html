@@ -5156,33 +5156,14 @@ function updateSheetStartBar() {
   if (sel.length > 0) {
     bar.classList.add('show');
     if (sel.length === 1) {
-      // Single exercise — simple label
       summary.innerHTML = `<span style="color:var(--primary);font-weight:800;">1.</span> <strong>${sel[0]}</strong> selecionado`;
     } else {
-      // Multiple — show draggable ordered list
-      summary.innerHTML = `
-        <div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">
-          Arraste para reordenar
-        </div>
-        <div id="dragQueueList" style="display:flex;flex-direction:column;gap:4px;">
-          ${sel.map((ex, i) => `
-            <div class="queue-item-draggable"
-              data-idx="${i}"
-              draggable="true"
-              ondragstart="onDragStart(event,${i})"
-              ondragover="onDragOver(event,${i})"
-              ondrop="onDrop(event,${i})"
-              ondragend="onDragEnd(event)"
-              ontouchstart="onTouchStart(event,${i})"
-              ontouchmove="onTouchMove(event)"
-              ontouchend="onTouchEnd(event,${i})"
-              style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);border:1.5px solid var(--border);border-radius:8px;">
-              <span class="drag-handle">⠿</span>
-              <span style="background:var(--primary);color:white;border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;flex-shrink:0;">${i+1}</span>
-              <span style="font-size:13px;font-weight:600;flex:1;text-align:left;">${ex}</span>
-            </div>
-          `).join('')}
-        </div>`;
+      // Multiple selected — just a compact count. The numbered badges
+      // already shown on each row in the main list (1, 2, 3...) are what
+      // reflects the current order; no separate draggable sublist here,
+      // since it was pushing the start button down and covering the
+      // exercise rows below it.
+      summary.innerHTML = `<strong>${sel.length} exercícios</strong> selecionados — toque nos números da lista para reordenar`;
     }
   } else {
     bar.classList.remove('show');
@@ -10169,7 +10150,6 @@ function reorderQueue(fromIdx, toIdx) {
   // Re-render
   renderSheetExList();
   updateSheetStartBar();
-  renderDraggableQueue();
   showToast('↕️ Ordem atualizada');
 }
 
