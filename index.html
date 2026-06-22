@@ -396,46 +396,15 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .ex-fav { font-size: 18px; cursor: pointer; padding: 2px; transition: transform 0.2s; flex-shrink: 0; }
 .ex-fav:active { transform: scale(1.3); }
 
-/* ── Swipe-to-reveal edit/delete on exercise rows (mobile) ── */
-.ex-item-swipe-wrap { position: relative; overflow: hidden; border-radius: var(--radius-sm); }
-.ex-item-swipe-front { position: relative; z-index: 2; margin-bottom: 0; will-change: transform; }
-.ex-item-swipe-actions {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 90px;
-  display: flex; z-index: 1;
+/* ── Edit/delete buttons — fixed, always visible, next to the favorite star ── */
+/* Same markup and behavior on mobile and desktop; no gesture or hover state
+   to get wrong on either platform. */
+.ex-icon-btn {
+  font-size: 15px; cursor: pointer; padding: 3px; flex-shrink: 0;
+  opacity: 0.75; transition: opacity 0.15s, transform 0.15s;
 }
-.ex-swipe-btn {
-  flex: 1; border: none; cursor: pointer; font-size: 18px;
-  display: flex; align-items: center; justify-content: center;
-  color: white;
-}
-.ex-swipe-edit { background: #3B82F6; }
-.ex-swipe-delete { background: var(--primary); }
-
-/* ── Desktop equivalent: hover reveal instead of swipe ── */
-/* On devices with a real mouse (fine pointer + hover support), edit/delete
-   buttons fade in on the right side of the row on hover, rather than relying
-   on a click-and-drag gesture that conflicts with normal clicking and other
-   buttons in the row (favorite star, checkbox, etc). The underlying actions
-   row stays in the same DOM position used for the mobile swipe; we just
-   change how it's revealed. */
-@media (hover: hover) and (pointer: fine) {
-  .ex-item-swipe-wrap { overflow: visible; }
-  .ex-item-swipe-actions {
-    opacity: 0; pointer-events: none;
-    transition: opacity 0.15s ease;
-    width: 76px; gap: 4px; right: 8px; top: 8px; bottom: 8px;
-    border-radius: var(--radius-sm); overflow: hidden;
-  }
-  .ex-item-swipe-wrap:hover .ex-item-swipe-actions { opacity: 1; pointer-events: auto; }
-  .ex-item-swipe-front { padding-right: 0; }
-  /* Make room for the buttons on hover by fading the last-load/star icons
-     out rather than overlapping them — keeps every existing control clickable. */
-  .ex-item-swipe-wrap:hover .ex-item-swipe-front .ex-last-load,
-  .ex-item-swipe-wrap:hover .ex-item-swipe-front .ex-fav {
-    opacity: 0; pointer-events: none; transition: opacity 0.1s ease;
-  }
-  .ex-swipe-btn { font-size: 15px; }
-}
+.ex-icon-btn:hover { opacity: 1; transform: scale(1.15); }
+.ex-icon-btn:active { transform: scale(0.95); }
 
 .add-ex-row { display: flex; gap: 8px; margin-top: 10px; position: relative; }
 .add-ex-input { flex: 1; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; font-family: var(--font-body); background: var(--bg2); color: var(--text); }
@@ -5001,23 +4970,18 @@ function renderSheetExList() {
       badge = `<div class="ex-check"></div>`;
     }
 
-    // Swipe-to-reveal wrapper: the visible row sits in .ex-item-swipe-front
-    // and slides left on swipe to reveal edit/delete buttons underneath in
-    // .ex-item-swipe-actions. See setupExSwipe() for the touch handling.
-    return `<div class="ex-item-swipe-wrap" data-ex="${exS}">
-      <div class="ex-item-swipe-actions">
-        <button class="ex-swipe-btn ex-swipe-edit" onclick="openEditExercise('${exS}', event)" title="Editar">✏️</button>
-        <button class="ex-swipe-btn ex-swipe-delete" onclick="confirmDeleteExercise('${exS}', event)" title="Excluir">🗑️</button>
+    // Edit/delete sit as small, always-visible icon buttons right next to
+    // the favorite star — same on mobile and desktop, no gesture needed.
+    return `<div class="ex-item ${isSel?'sheet-selected':''} ${isDone?'done':''}" onclick="toggleSheetEx('${exS}')">
+      ${badge}
+      <div style="flex:1;min-width:0;">
+        <div class="ex-name" style="margin-bottom:${lastCount>0?'2px':'0'};">${displayName}</div>
+        ${lastCount > 0 ? `<div style="font-size:10px;color:var(--muted);">${groupIcon} ${state.group} · <span style="color:var(--success);">${lastCount}× realizado</span></div>` : ''}
       </div>
-      <div class="ex-item ex-item-swipe-front ${isSel?'sheet-selected':''} ${isDone?'done':''}" onclick="toggleSheetEx('${exS}')">
-        ${badge}
-        <div style="flex:1;min-width:0;">
-          <div class="ex-name" style="margin-bottom:${lastCount>0?'2px':'0'};">${displayName}</div>
-          ${lastCount > 0 ? `<div style="font-size:10px;color:var(--muted);">${groupIcon} ${state.group} · <span style="color:var(--success);">${lastCount}× realizado</span></div>` : ''}
-        </div>
-        <span class="ex-last-load" style="flex-shrink:0;">${ll>0?ll+'kg':'—'}</span>
-        <span class="ex-fav" onclick="toggleFav('${exS}',event)">${favs.includes(ex)?'⭐':'☆'}</span>
-      </div>
+      <span class="ex-last-load" style="flex-shrink:0;">${ll>0?ll+'kg':'—'}</span>
+      <span class="ex-icon-btn ex-icon-edit" onclick="openEditExercise('${exS}', event)" title="Editar">✏️</span>
+      <span class="ex-icon-btn ex-icon-delete" onclick="confirmDeleteExercise('${exS}', event)" title="Excluir">🗑️</span>
+      <span class="ex-fav" onclick="toggleFav('${exS}',event)">${favs.includes(ex)?'⭐':'☆'}</span>
     </div>`;
   }).join('') + (hidden.length > 0 ? `
     <div style="text-align:center;padding:10px;">
@@ -5026,7 +4990,6 @@ function renderSheetExList() {
       </span>
     </div>` : '');
   document.getElementById('sheetExCount').textContent = exs.length;
-  setupExSwipe();
 }
 
 // Lets the person bring back standard exercises they'd previously hidden.
@@ -5049,70 +5012,6 @@ function toggleSheetEx(ex) {
   updateSheetStartBar();
 }
 
-// ── Swipe-to-reveal edit/delete on exercise rows ──
-// Each row is wrapped in .ex-item-swipe-wrap, with the visible content in
-// .ex-item-swipe-front (which translates left) and action buttons sitting
-// underneath in .ex-item-swipe-actions. We track touch start/move per row
-// and snap open/closed on release, closing any other open row first so
-// only one is ever revealed at a time.
-let _exSwipeOpenEl = null;
-// Swipe-to-reveal is a touch-only gesture (mobile). On desktop, the same
-// edit/delete buttons are revealed via CSS :hover instead — dragging with a
-// mouse to simulate a swipe turned out to conflict with click-to-select and
-// with other interactive elements in the row (see .ex-item-swipe-actions
-// CSS for the hover behavior).
-function setupExSwipe() {
-  const wraps = document.querySelectorAll('#sheetExList .ex-item-swipe-wrap');
-  wraps.forEach(wrap => {
-    const front = wrap.querySelector('.ex-item-swipe-front');
-    if (!front) return;
-    let startX = 0, startY = 0, currentX = 0, dragging = false, isHorizontal = null;
-
-    const onStart = (clientX, clientY) => {
-      startX = clientX;
-      startY = clientY;
-      currentX = 0;
-      dragging = true;
-      isHorizontal = null;
-      front.style.transition = 'none';
-    };
-    const onMove = (clientX, clientY) => {
-      if (!dragging) return;
-      const dx = clientX - startX;
-      const dy = clientY - startY;
-      if (isHorizontal === null) {
-        // Decide once per gesture whether this is a horizontal swipe or a
-        // vertical scroll/click, so we don't hijack normal list scrolling.
-        isHorizontal = Math.abs(dx) > Math.abs(dy);
-      }
-      if (!isHorizontal) return;
-      currentX = Math.max(-90, Math.min(0, dx));
-      front.style.transform = `translateX(${currentX}px)`;
-    };
-    const onEnd = () => {
-      if (!dragging) return;
-      dragging = false;
-      front.style.transition = 'transform 0.2s ease';
-      if (currentX < -45) {
-        if (_exSwipeOpenEl && _exSwipeOpenEl !== front) _exSwipeOpenEl.style.transform = 'translateX(0)';
-        front.style.transform = 'translateX(-90px)';
-        _exSwipeOpenEl = front;
-      } else {
-        front.style.transform = 'translateX(0)';
-        if (_exSwipeOpenEl === front) _exSwipeOpenEl = null;
-      }
-    };
-
-    front.addEventListener('touchstart', (e) => onStart(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
-    front.addEventListener('touchmove', (e) => onMove(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
-    front.addEventListener('touchend', onEnd);
-  });
-}
-
-function closeExSwipe() {
-  if (_exSwipeOpenEl) { _exSwipeOpenEl.style.transform = 'translateX(0)'; _exSwipeOpenEl = null; }
-}
-
 // ── Edit exercise name ──
 // Custom exercises (added by the person) get their real name changed.
 // Standard exercises (from the shared EXERCISES catalog) get a per-account
@@ -5120,7 +5019,6 @@ function closeExSwipe() {
 // for history/favorites/etc, so nothing breaks for this or any other user.
 function openEditExercise(ex, event) {
   if (event) event.stopPropagation();
-  closeExSwipe();
   const isCustom = (state.customExByGroup[state.group]||[]).includes(ex);
   const aliases = state.exAliases[state.group] || {};
   const currentDisplay = aliases[ex] || ex;
@@ -5186,7 +5084,6 @@ function renameCustomExercise(oldName, newName) {
 // view instead, never deleted from EXERCISES itself.
 function confirmDeleteExercise(ex, event) {
   if (event) event.stopPropagation();
-  closeExSwipe();
   const isCustom = (state.customExByGroup[state.group]||[]).includes(ex);
   const aliases = state.exAliases[state.group] || {};
   const displayName = aliases[ex] || ex;
