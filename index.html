@@ -3528,6 +3528,18 @@ function simpleHash(str) {
   return h.toString(36);
 }
 
+// Returns a 'YYYY-MM-DD' key using LOCAL calendar date, not UTC.
+// IMPORTANT: never use date.toISOString().slice(0,10) for "today"/"yesterday"
+// comparisons — toISOString() always converts to UTC, which rolls the date
+// over hours early for any timezone behind UTC (e.g. Brazil, UTC-3). That
+// mismatch previously caused workouts logged late in the day to show up
+// under "Ontem" instead of "Hoje" in the history. This helper is the single
+// source of truth for local day keys used in history grouping/comparison.
+function localDateKey(date) {
+  const d = date || new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
 function saveAccounts() { localStorage.setItem('wgym_accounts', JSON.stringify(accounts)); }
 
 function switchAuthTab(tab) {
@@ -7191,8 +7203,11 @@ function renderHistory() {
   let html = '';
   dayMap.forEach((entries, dayKey) => {
     const d = new Date(dayKey + 'T12:00:00');
-    const isToday = dayKey === new Date().toISOString().slice(0,10);
-    const isYesterday = dayKey === new Date(Date.now()-86400000).toISOString().slice(0,10);
+    // See localDateKey() — never use toISOString() here, it converts to UTC
+    // and rolls the date over hours early for timezones behind UTC.
+    const yest = new Date(); yest.setDate(yest.getDate() - 1);
+    const isToday = dayKey === localDateKey();
+    const isYesterday = dayKey === localDateKey(yest);
     const dayLabel = isToday ? 'Hoje' : isYesterday ? 'Ontem' : `${WEEKDAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 
     // Day summary stats
@@ -7289,8 +7304,11 @@ function openDayShareModal(dayKey, evt) {
   const d = new Date(dayKey + 'T12:00:00');
   const WEEKDAYS = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
   const MONTHS = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-  const isToday = dayKey === new Date().toISOString().slice(0,10);
-  const isYesterday = dayKey === new Date(Date.now()-86400000).toISOString().slice(0,10);
+  // See localDateKey() — never use toISOString() here, it converts to UTC
+  // and rolls the date over hours early for timezones behind UTC.
+  const yest = new Date(); yest.setDate(yest.getDate() - 1);
+  const isToday = dayKey === localDateKey();
+  const isYesterday = dayKey === localDateKey(yest);
   const dayLabel = isToday ? 'Hoje' : isYesterday ? 'Ontem'
     : `${WEEKDAYS[d.getDay()]}, ${d.getDate()} de ${MONTHS[d.getMonth()]} de ${d.getFullYear()}`;
   const dateStr = d.toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric' });
