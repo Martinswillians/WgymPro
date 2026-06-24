@@ -2,6 +2,9 @@
 <html lang="pt-BR" data-theme="dark">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -11193,6 +11196,34 @@ renderRegEmojiGrid();
 renderGroupGrid();
 renderTemplateGrid();
 patchUpdateExForm();
+
+// ── Stale-instance watchdog (iOS standalone PWA) ──
+// On iOS, a PWA saved to the home screen can be "suspended" in the
+// background instead of being closed — when reopened, it sometimes resumes
+// the exact same JS instance that was running before, rather than reloading
+// fresh code from the server. That means a person could open the app, it
+// works correctly with the latest code, then background it, and reopen to
+// the OLD code still running in memory (this is what caused a fixed
+// timezone bug to reappear after "saindo e voltando" to the app).
+// We track how long the page was hidden; if it comes back after more than
+// a couple of minutes away, we force a real reload so the latest deployed
+// version is always what's running, not a stale resumed instance.
+(function staleInstanceWatchdog() {
+  let hiddenAt = null;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      hiddenAt = Date.now();
+    } else if (document.visibilityState === 'visible' && hiddenAt) {
+      const awayMs = Date.now() - hiddenAt;
+      hiddenAt = null;
+      // 2 minutes away is enough to be "a real app switch", not just a
+      // quick glance at another app or a notification banner.
+      if (awayMs > 2 * 60 * 1000) {
+        window.location.reload();
+      }
+    }
+  });
+})();
 
 // If already logged in, skip auth screen
 // Pre-configure Spotify Client ID
