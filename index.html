@@ -10736,13 +10736,17 @@ async function spotifyLogin() {
   const verifier = await generateCodeVerifier();
   const challenge = await generateCodeChallenge(verifier);
   localStorage.setItem('spotify_code_verifier', verifier);
-  
-  // Use the registered redirect URI — must match Spotify Dashboard exactly
-  const registeredUri = 'https://martinswillians.github.io/WGym/';
-  // If running from the registered domain, use it; otherwise use current URL
-  const redirectUri = window.location.href.includes('martinswillians.github.io') 
-    ? registeredUri 
-    : window.location.href.split('?')[0].split('#')[0];
+
+  // Always use the page's own current location as the redirect URI — never
+  // hardcode a path here. This app has lived at more than one GitHub Pages
+  // path during development (e.g. /WGym/ then /WgymPro/); a hardcoded path
+  // previously sent people back to an old deployment with its own separate
+  // localStorage/Firebase session after Spotify login, which looked like
+  // "the app changed" or "my data is different" even though nothing was
+  // actually lost — it was just a different page entirely.
+  // IMPORTANT: this exact URL must also be added to the Spotify Developer
+  // Dashboard's Redirect URIs list, or the OAuth call will be rejected.
+  const redirectUri = window.location.origin + window.location.pathname;
   localStorage.setItem('spotify_redirect_uri', redirectUri);
   
   const params = new URLSearchParams({
