@@ -10722,27 +10722,20 @@ async function spotifyLogin() {
   const clientId = getSpotifyClientId();
   if (!clientId) { showToast('⚠️ Configure o Client ID primeiro'); return; }
 
-  // Open the tab synchronously, as the very first thing, while we're still
-  // inside the user's click/tap event. Mobile browsers only allow
-  // window.open() without it being treated as a blocked popup when it's
-  // called directly from a user gesture — any `await` before this point
-  // (even a fast crypto.subtle call) can make the browser stop trusting it
-  // as "from the user" and block it. We fill in the real URL once it's ready.
-  let popupWin = null;
-  if (_isMobileBrowser()) {
-    try { popupWin = window.open('about:blank', '_blank'); } catch(e) { popupWin = null; }
-  }
-
   const verifier = await generateCodeVerifier();
   const challenge = await generateCodeChallenge(verifier);
   localStorage.setItem('spotify_code_verifier', verifier);
-  
-  // Use the registered redirect URI — must match Spotify Dashboard exactly
-  const registeredUri = 'https://martinswillians.github.io/WGym/';
-  // If running from the registered domain, use it; otherwise use current URL
-  const redirectUri = window.location.href.includes('martinswillians.github.io') 
-    ? registeredUri 
-    : window.location.href.split('?')[0].split('#')[0];
+
+  // Always use the page's own current location as the redirect URI — never
+  // hardcode a path here. This app has lived at more than one GitHub Pages
+  // path during development (e.g. /WGym/ then /WgymPro/); a hardcoded path
+  // previously sent people back to an old deployment with its own separate
+  // localStorage/Firebase session after Spotify login, which looked like
+  // "the app changed" or "my data is different" even though nothing was
+  // actually lost — it was just a different page entirely.
+  // IMPORTANT: this exact URL must also be added to the Spotify Developer
+  // Dashboard's Redirect URIs list, or the OAuth call will be rejected.
+  const redirectUri = window.location.origin + window.location.pathname;
   localStorage.setItem('spotify_redirect_uri', redirectUri);
   
   const params = new URLSearchParams({
@@ -10756,25 +10749,18 @@ async function spotifyLogin() {
   });
   const authUrl = 'https://accounts.spotify.com/authorize?' + params.toString();
 
-  // On iOS/Android, the Spotify app registers as a Universal/App Link handler
-  // for accounts.spotify.com. A plain navigation (location.href / a normal
-  // link tap) can get intercepted by the native app instead of showing the
-  // OAuth web login — the app just opens to its home screen and the PKCE
-  // flow never completes. A separate tab avoids that on Safari; Chrome
-  // mobile tends to block that popup instead, so we check whether our
-  // earlier window.open() actually succeeded and fall back to same-tab
-  // navigation (the path that already worked before) if not.
-  if (_isMobileBrowser()) {
-    const popupBlocked = !popupWin || popupWin.closed || typeof popupWin.closed === 'undefined';
-    if (popupBlocked) {
-      try { if (popupWin) popupWin.close(); } catch(e) {}
-      window.location.href = authUrl;
-    } else {
-      popupWin.location.href = authUrl;
-    }
-  } else {
-    window.location.href = authUrl;
-  }
+  // Always navigate the CURRENT tab directly — no separate popup/tab.
+  // A previous version tried opening Spotify auth in a second tab on
+  // mobile to dodge the Spotify app intercepting accounts.spotify.com
+  // links, but that introduced a real bug: depending on the browser
+  // (notably Chrome on Android), the OAuth return could land in a
+  // different tab/window than the one that saved the PKCE verifier to
+  // localStorage, or behave inconsistently about which tab was "current"
+  // — leaving the ?code=... stuck in the address bar with login never
+  // completing. Same-tab navigation guarantees the tab that starts the
+  // login is the exact same tab that receives the callback, on every
+  // browser, which is what already worked reliably on Safari.
+  window.location.href = authUrl;
 }
 
 async function handleSpotifyCallback() {
@@ -10782,6 +10768,7 @@ async function handleSpotifyCallback() {
   const code = urlParams.get('code');
   const state = urlParams.get('state');
   const error = urlParams.get('error');
+  console.log('[WGym Spotify] handleSpotifyCallback running. code present:', !!code, 'state:', state);
   
   if (error) {
     showToast('❌ Login Spotify cancelado');
@@ -10790,12 +10777,30 @@ async function handleSpotifyCallback() {
   }
   if (!code || state !== 'wgym_auth') return;
   
-  // Clean URL
-  window.history.replaceState({}, '', window.location.pathname);
-  
   const clientId = getSpotifyClientId();
   const verifier = localStorage.getItem('spotify_code_verifier');
   const redirectUri = localStorage.getItem('spotify_redirect_uri');
+  console.log('[WGym Spotify] clientId:', !!clientId, 'verifier:', !!verifier, 'redirectUri:', redirectUri);
+
+  if (!verifier || !redirectUri) {
+    // This is the most likely failure mode on Chrome mobile: the OAuth
+    // callback landed in a DIFFERENT browsing context (tab/window) than the
+    // one that originally called spotifyLogin() and saved these values to
+    // localStorage. Since localStorage is shared per-origin, this should
+    // normally still work — but Chrome can sometimes partition storage
+    // differently for a window opened via window.open() vs one navigated
+    // directly, or the popup tab itself never actually got these values if
+    // mousedown/click ordering differed from Safari's. Surface this clearly
+    // instead of failing silently, and do NOT clear the URL — keeping the
+    // code in the URL means the person can at least see this happened and
+    // we can diagnose it instead of losing the auth code entirely.
+    showToast('⚠️ Sessão de login do Spotify perdida — tente conectar novamente');
+    console.warn('[WGym Spotify] Missing verifier/redirectUri in this tab\'s localStorage. This usually means the callback landed in a different tab than the one that started login.');
+    return;
+  }
+
+  // Clean URL only once we know we have what we need to actually use the code
+  window.history.replaceState({}, '', window.location.pathname);
   
   try {
     showToast('🔄 Conectando ao Spotify...');
@@ -10811,6 +10816,7 @@ async function handleSpotifyCallback() {
       })
     });
     const data = await resp.json();
+    console.log('[WGym Spotify] Token exchange response:', data.access_token ? 'success' : (data.error || 'unknown failure'));
     if (data.access_token) {
       saveSpotifyToken(data.access_token, data.expires_in);
       if (data.refresh_token) localStorage.setItem('spotify_refresh_token', data.refresh_token);
@@ -10826,6 +10832,7 @@ async function handleSpotifyCallback() {
     }
   } catch(e) {
     showToast('❌ Erro ao conectar: ' + e.message);
+    console.error('[WGym Spotify] Token exchange threw:', e);
     _closeCallbackTabIfPopup();
   }
 }
@@ -11216,9 +11223,15 @@ patchUpdateExForm();
     } else if (document.visibilityState === 'visible' && hiddenAt) {
       const awayMs = Date.now() - hiddenAt;
       hiddenAt = null;
+      // Never reload while a Spotify OAuth callback is sitting in the URL —
+      // logging into Spotify often takes more than 2 minutes (email login
+      // codes, 2FA, etc), so coming back from that would otherwise trigger
+      // this reload mid-flow, racing with (and sometimes preventing)
+      // handleSpotifyCallback() from ever completing the token exchange.
+      const hasPendingSpotifyCallback = new URLSearchParams(window.location.search).get('state') === 'wgym_auth';
       // 2 minutes away is enough to be "a real app switch", not just a
       // quick glance at another app or a notification banner.
-      if (awayMs > 2 * 60 * 1000) {
+      if (awayMs > 2 * 60 * 1000 && !hasPendingSpotifyCallback) {
         window.location.reload();
       }
     }
@@ -11232,9 +11245,21 @@ if (!localStorage.getItem('wgym_spotify_client_id')) {
 }
 
 // Handle Spotify OAuth callback
-if (new URLSearchParams(window.location.search).get('state') === 'wgym_auth') {
-  handleSpotifyCallback();
+let _spotifyCallbackHandled = false;
+function _tryHandleSpotifyCallbackOnce() {
+  if (_spotifyCallbackHandled) return;
+  if (new URLSearchParams(window.location.search).get('state') === 'wgym_auth') {
+    _spotifyCallbackHandled = true;
+    handleSpotifyCallback();
+  }
 }
+_tryHandleSpotifyCallbackOnce();
+// Safety net: if for any reason the boot-time check above ran before the
+// callback URL was fully in place (timing edge cases when returning from
+// the Spotify app/login flow), also check once the tab is confirmed visible.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') _tryHandleSpotifyCallbackOnce();
+});
 
 // If the mobile login flow opened Spotify auth in a separate tab (to avoid
 // the Spotify app intercepting accounts.spotify.com), that tab pings this
