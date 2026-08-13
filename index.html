@@ -1444,6 +1444,38 @@ select.form-input option { background: var(--card2); color: var(--text); }
 }
 .summary-close-btn:active { background: var(--border); }
 
+/* ── Workout photo carousel ── */
+.sum-photos-section { margin: 16px 0 8px; }
+.sum-photos-title { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; }
+.sum-photos-carousel {
+  display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px;
+  scrollbar-width: none;
+}
+.sum-photos-carousel::-webkit-scrollbar { display: none; }
+.sum-photo-item {
+  position: relative; flex-shrink: 0; width: 100px; height: 100px;
+  border-radius: var(--radius-sm); overflow: hidden;
+  border: 2px solid var(--border); cursor: pointer;
+}
+.sum-photo-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sum-photo-remove {
+  position: absolute; top: 4px; right: 4px;
+  background: rgba(0,0,0,0.65); border: none; border-radius: 50%;
+  color: white; font-size: 14px; width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; line-height: 1;
+}
+.sum-photo-add-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 16px; border-radius: var(--radius-sm);
+  border: 1.5px dashed var(--border2); background: var(--card2);
+  color: var(--muted); font-size: 13px; font-weight: 600;
+  cursor: pointer; margin-top: 8px; width: 100%;
+  justify-content: center; transition: border-color 0.2s, color 0.2s;
+}
+.sum-photo-add-btn:hover { border-color: var(--primary); color: var(--primary); }
+.sum-photo-hint { font-size: 11px; color: var(--muted); text-align: center; margin-top: 6px; min-height: 16px; }
+
 /* ── 1. AI PERIODIZATION ── */
 .ai-section { margin-bottom: 10px; }
 .ai-card {
@@ -3188,6 +3220,20 @@ select.form-input option { background: var(--card2); color: var(--text); }
       </div>
       <div class="summary-section-title">Exercícios realizados</div>
       <div class="summary-ex-list" id="sumExList"></div>
+
+      <!-- ── Workout photo carousel (up to 4 photos) ── -->
+      <div class="sum-photos-section">
+        <div class="sum-photos-title">📸 Fotos do Treino <span style="font-size:11px;color:var(--muted);font-weight:400;">(até 4)</span></div>
+        <div class="sum-photos-carousel" id="sumPhotosCarousel">
+          <!-- Photos are inserted here dynamically -->
+        </div>
+        <label class="sum-photo-add-btn" id="sumPhotoAddBtn" for="sumPhotoInput">
+          <span>📷</span> Adicionar foto
+          <input type="file" id="sumPhotoInput" accept="image/*" multiple style="display:none;" onchange="handleSummaryPhotos(event)">
+        </label>
+        <div class="sum-photo-hint" id="sumPhotoHint"></div>
+      </div>
+
       <div class="summary-share-title">Compartilhar treino completo</div>
       <div class="summary-share-grid">
         <button class="share-btn share-whatsapp" onclick="shareTrainingSummary('whatsapp')"><span class="sb-icon">💬</span>WhatsApp</button>
@@ -3320,6 +3366,7 @@ const EXERCISES = {
   'Posteriores': ['Mesa Flexora','Stiff','Leg Curl','Cadeira Flexora','Good Morning','Hiperextensão'],
   'Quadríceps': ['Leg Press','Agachamento','Hack Squat','Extensora','Afundo','Agachamento Sumô'],
   'Ombro': ['Desenvolvimento','Elevação Lateral','Elevação Frontal','Crucifixo Invertido','Arnold Press','Remada Alta'],
+  'Abdome': ['Abdominal Supra','Abdominal Infra','Prancha','Crunch','Oblíquo','Elevação de Pernas','Abdominal Remador','Bicicleta Abdominal','Abdominal na Polia','Abdominal Declinado'],
   'Aeróbico': ['Esteira','Bicicleta','Elíptico','Corda','Remo Ergométrico','Escada','Jumping Jack']
 };
 
@@ -3392,6 +3439,7 @@ const DEFAULT_GROUPS = [
   {id:'poster',  name:'Posteriores',icon:'🦵', builtin:true},
   {id:'quad',    name:'Quadríceps', icon:'🦿', builtin:true},
   {id:'ombro',   name:'Ombro',      icon:'🏹', builtin:true},
+  {id:'abdome',  name:'Abdome',     icon:'🔥', builtin:true},
   {id:'aerob',   name:'Aeróbico',   icon:'🏃', builtin:true},
 ];
 
@@ -7056,10 +7104,76 @@ function showTrainingSummary(entries, exCount, trainStart, group, uid) {
 
   // Show modal
   document.getElementById('summaryOverlay').classList.add('show');
+  // Reset and initialize the photo carousel for this new workout
+  _summaryPhotos = [];
+  renderSummaryPhotos();
 }
 
 function closeSummaryModal() {
   document.getElementById('summaryOverlay').classList.remove('show');
+  // Clear photos when the modal is closed so next workout starts fresh
+  _summaryPhotos = [];
+  renderSummaryPhotos();
+}
+
+// ── Workout photo carousel logic ──
+// Up to 4 photos per workout, stored as base64 data URLs in memory for
+// the duration the summary modal is open. Not persisted to localStorage
+// (photos are large; the person can share/save them manually if they want).
+let _summaryPhotos = []; // array of { dataUrl, id }
+
+function handleSummaryPhotos(event) {
+  const files = Array.from(event.target.files || []);
+  const remaining = 4 - _summaryPhotos.length;
+  if (remaining <= 0) { showToast('⚠️ Limite de 4 fotos atingido'); event.target.value = ''; return; }
+  const toAdd = files.slice(0, remaining);
+  if (files.length > remaining) showToast(`⚠️ Apenas ${remaining} foto(s) adicionada(s) — limite é 4`);
+  toAdd.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      _summaryPhotos.push({ dataUrl: e.target.result, id: Date.now() + Math.random() });
+      renderSummaryPhotos();
+    };
+    reader.readAsDataURL(file);
+  });
+  event.target.value = ''; // reset so same file can be re-added if removed
+}
+
+function removeSummaryPhoto(id) {
+  _summaryPhotos = _summaryPhotos.filter(p => p.id !== id);
+  renderSummaryPhotos();
+}
+
+function renderSummaryPhotos() {
+  const carousel = document.getElementById('sumPhotosCarousel');
+  const addBtn = document.getElementById('sumPhotoAddBtn');
+  const hint = document.getElementById('sumPhotoHint');
+  if (!carousel) return;
+
+  carousel.innerHTML = _summaryPhotos.map(p => `
+    <div class="sum-photo-item" onclick="openSummaryPhotoFull('${p.id}')">
+      <img src="${p.dataUrl}" alt="Foto treino">
+      <button class="sum-photo-remove" onclick="event.stopPropagation();removeSummaryPhoto(${p.id})" title="Remover">✕</button>
+    </div>
+  `).join('');
+
+  const count = _summaryPhotos.length;
+  if (addBtn) addBtn.style.display = count >= 4 ? 'none' : 'flex';
+  if (hint) hint.textContent = count === 0 ? 'Registre o momento do seu treino!' : count === 4 ? '✅ 4 fotos adicionadas (limite máximo)' : `${count}/4 fotos`;
+}
+
+function openSummaryPhotoFull(id) {
+  const photo = _summaryPhotos.find(p => p.id === id);
+  if (!photo) return;
+  // Simple full-screen preview using a temporary overlay
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
+  overlay.onclick = () => document.body.removeChild(overlay);
+  const img = document.createElement('img');
+  img.src = photo.dataUrl;
+  img.style.cssText = 'max-width:95vw;max-height:90vh;border-radius:8px;object-fit:contain;';
+  overlay.appendChild(img);
+  document.body.appendChild(overlay);
 }
 
 function buildTrainingSummaryText() {
