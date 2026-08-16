@@ -1475,6 +1475,27 @@ select.form-input option { background: var(--card2); color: var(--text); }
 }
 .sum-photo-add-btn:hover { border-color: var(--primary); color: var(--primary); }
 .sum-photo-hint { font-size: 11px; color: var(--muted); text-align: center; margin-top: 6px; min-height: 16px; }
+.sum-share-card-btn {
+  width: 100%; padding: 12px; margin: 10px 0 4px;
+  background: linear-gradient(135deg, #FF3D25, #FF6B35);
+  border: none; border-radius: var(--radius); color: white;
+  font-size: 14px; font-weight: 700; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  font-family: var(--font-body); transition: opacity 0.2s;
+}
+.sum-share-card-btn:active { opacity: 0.85; }
+
+/* ── Photos in history view ── */
+.hist-photos-row { padding: 10px 14px 14px; }
+.hist-photos-label { font-size: 11px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
+.hist-photos-strip { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+.hist-photos-strip::-webkit-scrollbar { display: none; }
+.hist-photo-thumb {
+  flex-shrink: 0; width: 80px; height: 80px; border-radius: 8px; overflow: hidden;
+  border: 1.5px solid var(--border); cursor: pointer; transition: transform 0.15s;
+}
+.hist-photo-thumb:active { transform: scale(0.96); }
+.hist-photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
 /* ── 1. AI PERIODIZATION ── */
 .ai-section { margin-bottom: 10px; }
@@ -3241,6 +3262,9 @@ select.form-input option { background: var(--card2); color: var(--text); }
         <button class="share-btn share-copy" onclick="shareTrainingSummary('copy')"><span class="sb-icon">📋</span>Copiar</button>
         <button class="share-btn share-more" onclick="shareTrainingSummary('native')"><span class="sb-icon">↗️</span>Mais</button>
       </div>
+      <button id="sumShareCardBtn" class="sum-share-card-btn" onclick="shareWorkoutCard()" style="display:none;">
+        🖼️ Gerar card com foto e compartilhar
+      </button>
       <button class="summary-close-btn" onclick="closeSummaryModal()">✓ Fechar</button>
     </div>
   </div>
@@ -7055,7 +7079,8 @@ function showTrainingSummary(entries, exCount, trainStart, group, uid) {
   // Save for share
   _trainingSummaryData = {
     group, durationStr, exCount: exItems.length,
-    totalVol, totalSeries, bestRM, bestRMEx, prs, exItems, kcal
+    totalVol, totalSeries, bestRM, bestRMEx, prs, exItems, kcal,
+    trainStart: trainStart || new Date().toISOString()
   };
 
   // Populate DOM
@@ -7118,29 +7143,101 @@ function closeSummaryModal() {
 
 // ── Workout photo carousel logic ──
 // Up to 4 photos per workout, stored as base64 data URLs in memory for
-// the duration the summary modal is open. Not persisted to localStorage
-// (photos are large; the person can share/save them manually if they want).
-let _summaryPhotos = []; // array of { dataUrl, id }
+// Photos are compressed to ~150KB before saving so they fit in localStorage
+// (5MB total budget) and Firestore (1MB/doc). Each workout session gets its
+// own key in wgym_workout_photos, indexed by trainStart ISO string.
+let _summaryPhotos = []; // array of { dataUrl, id } — in-memory during modal
 
-function handleSummaryPhotos(event) {
+// ── Compress image to target size using an offscreen canvas ──
+function compressImage(dataUrl, maxW, maxH, quality) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width, h = img.height;
+      if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+      if (h > maxH) { w = Math.round(w * maxH / h); h = maxH; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', quality || 0.7));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+// ── Persist photos for a given session key ──
+function saveWorkoutPhotos(sessionKey, photos) {
+  if (!sessionKey || !photos.length) return;
+  try {
+    const all = JSON.parse(localStorage.getItem('wgym_workout_photos') || '{}');
+    // Store only the compressed dataUrls, indexed by sessionKey
+    all[sessionKey] = photos.map(p => p.dataUrl);
+    // Keep at most 60 sessions worth of photos to avoid blowing up storage
+    const keys = Object.keys(all);
+    if (keys.length > 60) {
+      keys.sort().slice(0, keys.length - 60).forEach(k => delete all[k]);
+    }
+    localStorage.setItem('wgym_workout_photos', JSON.stringify(all));
+    // Sync a lightweight index (not the full photos) to Firestore to avoid
+    // hitting Firestore's 1MB doc limit; photos stay local-only.
+    const photoIndex = {};
+    Object.keys(all).forEach(k => { photoIndex[k] = all[k].length; });
+    queueCloudSync('wgym_workout_photo_index');
+  } catch(e) {
+    console.warn('[WGym] Failed to save workout photos:', e);
+    showToast('⚠️ Fotos salvas localmente apenas (sem espaço pra sincronizar)');
+  }
+}
+
+function loadWorkoutPhotos(sessionKey) {
+  try {
+    const all = JSON.parse(localStorage.getItem('wgym_workout_photos') || '{}');
+    return (all[sessionKey] || []).map((dataUrl, i) => ({ dataUrl, id: sessionKey + '_' + i }));
+  } catch(e) { return []; }
+}
+
+function deleteWorkoutPhoto(sessionKey, photoId) {
+  try {
+    const all = JSON.parse(localStorage.getItem('wgym_workout_photos') || '{}');
+    const list = all[sessionKey] || [];
+    const idx = parseInt(photoId.split('_').pop(), 10);
+    if (!isNaN(idx)) list.splice(idx, 1);
+    if (list.length === 0) delete all[sessionKey];
+    else all[sessionKey] = list;
+    localStorage.setItem('wgym_workout_photos', JSON.stringify(all));
+  } catch(e) {}
+}
+
+// ── Handle file input — compress and add to in-memory list then save ──
+async function handleSummaryPhotos(event) {
   const files = Array.from(event.target.files || []);
   const remaining = 4 - _summaryPhotos.length;
   if (remaining <= 0) { showToast('⚠️ Limite de 4 fotos atingido'); event.target.value = ''; return; }
   const toAdd = files.slice(0, remaining);
   if (files.length > remaining) showToast(`⚠️ Apenas ${remaining} foto(s) adicionada(s) — limite é 4`);
-  toAdd.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      _summaryPhotos.push({ dataUrl: e.target.result, id: Date.now() + Math.random() });
-      renderSummaryPhotos();
-    };
-    reader.readAsDataURL(file);
-  });
-  event.target.value = ''; // reset so same file can be re-added if removed
+  showToast('🔄 Processando fotos...');
+  for (const file of toAdd) {
+    const raw = await new Promise(res => {
+      const r = new FileReader();
+      r.onload = e => res(e.target.result);
+      r.readAsDataURL(file);
+    });
+    // Compress to max 800×800px at 70% quality — roughly 100–180KB per photo
+    const compressed = await compressImage(raw, 800, 800, 0.7);
+    _summaryPhotos.push({ dataUrl: compressed, id: Date.now() + Math.random() });
+  }
+  // Persist immediately so closing the modal doesn't lose them
+  const key = _trainingSummaryData.trainStart;
+  if (key) saveWorkoutPhotos(key, _summaryPhotos);
+  renderSummaryPhotos();
+  event.target.value = '';
 }
 
 function removeSummaryPhoto(id) {
   _summaryPhotos = _summaryPhotos.filter(p => p.id !== id);
+  const key = _trainingSummaryData.trainStart;
+  if (key) saveWorkoutPhotos(key, _summaryPhotos);
   renderSummaryPhotos();
 }
 
@@ -7149,31 +7246,143 @@ function renderSummaryPhotos() {
   const addBtn = document.getElementById('sumPhotoAddBtn');
   const hint = document.getElementById('sumPhotoHint');
   if (!carousel) return;
-
+  const safeId = (id) => String(id).replace(/[^a-zA-Z0-9_\-\.]/g, '_');
   carousel.innerHTML = _summaryPhotos.map(p => `
-    <div class="sum-photo-item" onclick="openSummaryPhotoFull('${p.id}')">
+    <div class="sum-photo-item" onclick="openSummaryPhotoFull('${safeId(p.id)}')">
       <img src="${p.dataUrl}" alt="Foto treino">
-      <button class="sum-photo-remove" onclick="event.stopPropagation();removeSummaryPhoto(${p.id})" title="Remover">✕</button>
+      <button class="sum-photo-remove" onclick="event.stopPropagation();removeSummaryPhoto('${safeId(p.id)}')" title="Remover">✕</button>
     </div>
   `).join('');
-
   const count = _summaryPhotos.length;
   if (addBtn) addBtn.style.display = count >= 4 ? 'none' : 'flex';
-  if (hint) hint.textContent = count === 0 ? 'Registre o momento do seu treino!' : count === 4 ? '✅ 4 fotos adicionadas (limite máximo)' : `${count}/4 fotos`;
+  if (hint) hint.textContent = count === 0 ? 'Registre o momento do seu treino!' : count === 4 ? '✅ 4 fotos (limite máximo)' : `${count}/4 fotos`;
+  const cardBtn = document.getElementById('sumShareCardBtn');
+  if (cardBtn) cardBtn.style.display = count > 0 ? 'flex' : 'none';
 }
 
 function openSummaryPhotoFull(id) {
-  const photo = _summaryPhotos.find(p => p.id === id);
+  const photo = _summaryPhotos.find(p => String(p.id).replace(/[^a-zA-Z0-9_\-\.]/g, '_') === id);
   if (!photo) return;
-  // Simple full-screen preview using a temporary overlay
   const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
-  overlay.onclick = () => document.body.removeChild(overlay);
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;';
+  overlay.onclick = (e) => { if (e.target === overlay || e.target === img) document.body.removeChild(overlay); };
   const img = document.createElement('img');
   img.src = photo.dataUrl;
-  img.style.cssText = 'max-width:95vw;max-height:90vh;border-radius:8px;object-fit:contain;';
+  img.style.cssText = 'max-width:95vw;max-height:75vh;border-radius:8px;object-fit:contain;cursor:zoom-out;';
+  // Share button for this individual photo
+  const shareBtn = document.createElement('button');
+  shareBtn.textContent = '📤 Compartilhar esta foto';
+  shareBtn.style.cssText = 'padding:10px 24px;background:var(--primary);color:white;border:none;border-radius:24px;font-size:14px;font-weight:700;cursor:pointer;';
+  shareBtn.onclick = async (e) => {
+    e.stopPropagation();
+    await shareSingleWorkoutPhoto(photo.dataUrl);
+  };
   overlay.appendChild(img);
+  overlay.appendChild(shareBtn);
   document.body.appendChild(overlay);
+}
+
+// ── Share a single photo using the Web Share API (mobile) or download (desktop) ──
+async function shareSingleWorkoutPhoto(dataUrl) {
+  try {
+    const blob = await (await fetch(dataUrl)).blob();
+    const file = new File([blob], 'treino-willgym.jpg', { type: 'image/jpeg' });
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'Will Gym — Treino', text: buildTrainingSummaryText() });
+    } else {
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = 'treino-willgym.jpg';
+      a.click();
+    }
+  } catch(e) { if (e.name !== 'AbortError') showToast('⚠️ Não foi possível compartilhar a foto'); }
+}
+
+// ── Generate a workout card image (stats + photo) and share it ──
+async function shareWorkoutCard() {
+  const d = _trainingSummaryData;
+  if (!d.trainStart) { showToast('⚠️ Nenhum dado de treino disponível'); return; }
+  const photo = _summaryPhotos.length > 0 ? _summaryPhotos[0] : null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 800; canvas.height = photo ? 960 : 560;
+  const ctx = canvas.getContext('2d');
+
+  // Background
+  ctx.fillStyle = '#0D0D0F';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Top photo (if any)
+  let textY = 40;
+  if (photo) {
+    const img = new Image();
+    await new Promise(res => { img.onload = res; img.onerror = res; img.src = photo.dataUrl; });
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(40, 40, 720, 400, 16);
+    ctx.clip();
+    // Cover-fit the image
+    const iw = img.width, ih = img.height;
+    const scale = Math.max(720/iw, 400/ih);
+    const dw = iw*scale, dh = ih*scale;
+    ctx.drawImage(img, 40+(720-dw)/2, 40+(400-dh)/2, dw, dh);
+    ctx.restore();
+    // Gradient overlay so text is readable
+    const grad = ctx.createLinearGradient(0, 300, 0, 440);
+    grad.addColorStop(0, 'rgba(13,13,15,0)');
+    grad.addColorStop(1, 'rgba(13,13,15,0.85)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(40, 40, 720, 400);
+    textY = 460;
+  }
+
+  // Logo/title
+  ctx.fillStyle = '#FF3D25';
+  ctx.font = 'bold 28px system-ui, sans-serif';
+  ctx.fillText('Will Gym PRO', 40, textY);
+  textY += 40;
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 36px system-ui, sans-serif';
+  ctx.fillText((d.group || 'Treino') + ' — Concluído! 🏆', 40, textY);
+  textY += 48;
+
+  // Stats row
+  const stats = [
+    ['⏱', d.durationStr, 'Duração'],
+    ['💪', String(d.exCount), 'Exercícios'],
+    ['🏋️', d.totalVol > 999 ? (d.totalVol/1000).toFixed(1)+'t' : d.totalVol+'kg', 'Volume'],
+  ];
+  stats.forEach((s, i) => {
+    const x = 40 + i * 247;
+    ctx.fillStyle = '#1A1A2E';
+    ctx.beginPath();
+    ctx.roundRect(x, textY, 227, 90, 12);
+    ctx.fill();
+    ctx.fillStyle = '#FF3D25';
+    ctx.font = 'bold 32px system-ui, sans-serif';
+    ctx.fillText(s[0] + ' ' + s[1], x + 14, textY + 42);
+    ctx.fillStyle = '#8A9BBF';
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.fillText(s[2], x + 14, textY + 70);
+  });
+  textY += 108;
+
+  // PRs if any
+  if (d.prs && d.prs.length > 0) {
+    ctx.fillStyle = '#FFB800';
+    ctx.font = 'bold 18px system-ui, sans-serif';
+    ctx.fillText('🏅 Novos PRs: ' + d.prs.map(p => p.split(' ')[0]).join(', '), 40, textY);
+    textY += 34;
+  }
+
+  // Footer
+  ctx.fillStyle = '#555';
+  ctx.font = '13px system-ui, sans-serif';
+  ctx.fillText('martinswillians.github.io/WgymPro', 40, canvas.height - 20);
+
+  // Share
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  await shareSingleWorkoutPhoto(dataUrl);
 }
 
 function buildTrainingSummaryText() {
@@ -7358,7 +7567,7 @@ function renderHistory() {
     const TYPE_ICONS = {
       'Sugerido': '🤖', 'Livre': '⚡', 'Aeróbico': '🏃', 'Aerobico': '🏃', 'Cardio': '🏃',
       'Peito': '💪', 'Costas': '🔙', 'Bíceps': '🦾', 'Tríceps': '💥',
-      'Posteriores': '🦵', 'Quadríceps': '🦿', 'Ombro': '🏹',
+      'Posteriores': '🦵', 'Quadríceps': '🦿', 'Ombro': '🏹', 'Abdome': '🔥',
     };
     const TYPE_BADGE_CLASS = {
       'Sugerido': 'suggested', 'Livre': 'free',
@@ -7383,6 +7592,27 @@ function renderHistory() {
       }
       bodyHtml += typeEntries.map(h => buildHistItem(h, exMap)).join('');
     });
+
+    // Photos for this day — collect all unique trainStart keys from the day's entries
+    // and load their photos from the persistent store
+    const sessionKeys = [...new Set(entries.map(h => h.trainStart).filter(Boolean))];
+    let photosHtml = '';
+    sessionKeys.forEach(sk => {
+      const photos = loadWorkoutPhotos(sk);
+      if (photos.length > 0) {
+        photosHtml += `<div class="hist-photos-row">
+          <div class="hist-photos-label">📸 Fotos do treino</div>
+          <div class="hist-photos-strip">
+            ${photos.map((p, i) => `
+              <div class="hist-photo-thumb" onclick="openHistoryPhotoFull('${sk}', ${i})">
+                <img src="${p.dataUrl}" alt="Foto treino">
+              </div>
+            `).join('')}
+          </div>
+        </div>`;
+      }
+    });
+    if (photosHtml) bodyHtml += photosHtml;
 
     html += `<div class="hist-day-group ${openCls}" id="dayGroup_${dayKey}">
       <div class="hist-day-header" onclick="toggleDayGroup('${dayKey}')">
@@ -7410,6 +7640,73 @@ function toggleDayGroup(dayKey) {
     el.classList.add('open');
     _openDays.add(dayKey);
   }
+}
+
+function openHistoryPhotoFull(sessionKey, photoIndex) {
+  const photos = loadWorkoutPhotos(sessionKey);
+  if (!photos.length) return;
+  let current = photoIndex;
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;';
+  overlay.onclick = (e) => { if (e.target === overlay) document.body.removeChild(overlay); };
+
+  const img = document.createElement('img');
+  img.style.cssText = 'max-width:95vw;max-height:70vh;border-radius:8px;object-fit:contain;';
+
+  const nav = document.createElement('div');
+  nav.style.cssText = 'display:flex;gap:12px;align-items:center;';
+
+  const counter = document.createElement('span');
+  counter.style.cssText = 'color:white;font-size:13px;';
+
+  const update = (idx) => {
+    current = idx;
+    img.src = photos[idx].dataUrl;
+    counter.textContent = `${idx + 1} / ${photos.length}`;
+    prevBtn.style.opacity = idx === 0 ? '0.3' : '1';
+    nextBtn.style.opacity = idx === photos.length - 1 ? '0.3' : '1';
+  };
+
+  const btnStyle = 'padding:8px 20px;background:rgba(255,255,255,0.15);border:none;border-radius:20px;color:white;font-size:18px;cursor:pointer;';
+  const prevBtn = document.createElement('button');
+  prevBtn.textContent = '‹'; prevBtn.style.cssText = btnStyle;
+  prevBtn.onclick = (e) => { e.stopPropagation(); if (current > 0) update(current - 1); };
+
+  const nextBtn = document.createElement('button');
+  nextBtn.textContent = '›'; nextBtn.style.cssText = btnStyle;
+  nextBtn.onclick = (e) => { e.stopPropagation(); if (current < photos.length - 1) update(current + 1); };
+
+  // Share and delete buttons
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;gap:10px;';
+
+  const shareBtn = document.createElement('button');
+  shareBtn.textContent = '📤 Compartilhar';
+  shareBtn.style.cssText = 'padding:9px 20px;background:var(--primary);color:white;border:none;border-radius:24px;font-size:13px;font-weight:700;cursor:pointer;';
+  shareBtn.onclick = async (e) => { e.stopPropagation(); await shareSingleWorkoutPhoto(photos[current].dataUrl); };
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.textContent = '🗑️ Excluir';
+  deleteBtn.style.cssText = 'padding:9px 20px;background:rgba(255,61,37,0.2);color:#FF3D25;border:1px solid #FF3D25;border-radius:24px;font-size:13px;font-weight:700;cursor:pointer;';
+  deleteBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (!confirm('Excluir esta foto do histórico?')) return;
+    deleteWorkoutPhoto(sessionKey, photos[current].id);
+    document.body.removeChild(overlay);
+    renderHistory(); // refresh to remove the thumbnail
+  };
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕ Fechar';
+  closeBtn.style.cssText = 'padding:9px 20px;background:rgba(255,255,255,0.1);color:white;border:none;border-radius:24px;font-size:13px;cursor:pointer;';
+  closeBtn.onclick = (e) => { e.stopPropagation(); document.body.removeChild(overlay); };
+
+  if (photos.length > 1) nav.append(prevBtn, counter, nextBtn);
+  actions.append(shareBtn, deleteBtn, closeBtn);
+  overlay.append(img, nav, actions);
+  document.body.appendChild(overlay);
+  update(current);
 }
 
 // ─── Day Share Modal ──────────────────────────────────
