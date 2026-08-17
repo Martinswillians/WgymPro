@@ -1445,7 +1445,13 @@ select.form-input option { background: var(--card2); color: var(--text); }
 .summary-close-btn:active { background: var(--border); }
 
 /* ── Workout photo carousel ── */
-.sum-photos-section { margin: 16px 0 8px; }
+.sum-photos-section {
+  margin: 0 0 16px;
+  background: var(--card2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
 .sum-photos-title { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; }
 .sum-photos-carousel {
   display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px;
@@ -3239,21 +3245,19 @@ select.form-input option { background: var(--card2); color: var(--text); }
         <div class="summary-prs-title">🥇 Novos Recordes Pessoais</div>
         <div class="summary-prs-list" id="sumPRList"></div>
       </div>
-      <div class="summary-section-title">Exercícios realizados</div>
-      <div class="summary-ex-list" id="sumExList"></div>
-
       <!-- ── Workout photo carousel (up to 4 photos) ── -->
-      <div class="sum-photos-section">
+      <div class="sum-photos-section" id="sumPhotosSection">
         <div class="sum-photos-title">📸 Fotos do Treino <span style="font-size:11px;color:var(--muted);font-weight:400;">(até 4)</span></div>
-        <div class="sum-photos-carousel" id="sumPhotosCarousel">
-          <!-- Photos are inserted here dynamically -->
-        </div>
+        <div class="sum-photos-carousel" id="sumPhotosCarousel"></div>
         <label class="sum-photo-add-btn" id="sumPhotoAddBtn" for="sumPhotoInput">
           <span>📷</span> Adicionar foto
-          <input type="file" id="sumPhotoInput" accept="image/*" multiple style="display:none;" onchange="handleSummaryPhotos(event)">
+          <input type="file" id="sumPhotoInput" accept="image/*" capture="environment" multiple style="display:none;" onchange="handleSummaryPhotos(event)">
         </label>
-        <div class="sum-photo-hint" id="sumPhotoHint"></div>
+        <div class="sum-photo-hint" id="sumPhotoHint">Registre o momento do seu treino!</div>
       </div>
+
+      <div class="summary-section-title">Exercícios realizados</div>
+      <div class="summary-ex-list" id="sumExList"></div>
 
       <div class="summary-share-title">Compartilhar treino completo</div>
       <div class="summary-share-grid">
