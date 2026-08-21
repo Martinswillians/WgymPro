@@ -7133,8 +7133,10 @@ function showTrainingSummary(entries, exCount, trainStart, group, uid) {
 
   // Show modal
   document.getElementById('summaryOverlay').classList.add('show');
-  // Reset and initialize the photo carousel for this new workout
-  _summaryPhotos = [];
+  // Load any photos already saved for this session (e.g. if user added them
+  // before and re-opens the modal), or start fresh for a new workout
+  const sessionKey = trainStart || new Date().toISOString();
+  _summaryPhotos = loadWorkoutPhotos(sessionKey);
   renderSummaryPhotos();
 }
 
@@ -7287,105 +7289,145 @@ function openSummaryPhotoFull(id) {
 }
 
 // ── Share a single photo using the Web Share API (mobile) or download (desktop) ──
+// IMPORTANT: on iOS Safari and Chrome mobile, navigator.share() MUST be called
+// synchronously from within a user gesture handler. Any async operation
+// (including fetch, canvas rendering, or image loading) before the share()
+// call causes the browser to consider it "not user-initiated" and block it.
+// Strategy: do all async work first, then call share() as the LAST step
+// with no awaits between the blob creation and the share() call.
 async function shareSingleWorkoutPhoto(dataUrl) {
   try {
-    const blob = await (await fetch(dataUrl)).blob();
-    const file = new File([blob], 'treino-willgym.jpg', { type: 'image/jpeg' });
+    // Convert data URL to blob without fetch — atob is synchronous and
+    // doesn't lose the user-gesture context on iOS the way fetch does.
+    const parts = dataUrl.split(',');
+    const mime = (parts[0].match(/:(.*?);/) || [])[1] || 'image/jpeg';
+    const binary = atob(parts[1]);
+    const arr = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+    const blob = new Blob([arr], { type: mime });
+    const file = new File([blob], 'treino-willgym.jpg', { type: mime });
+
     if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: 'Will Gym — Treino', text: buildTrainingSummaryText() });
+      // share() called immediately after blob creation — no async gap
+      await navigator.share({ files: [file], title: 'Will Gym PRO — Treino', text: buildTrainingSummaryText() });
+    } else if (navigator.share) {
+      // Fallback: share without file (just text + url), works on more browsers
+      await navigator.share({ title: 'Will Gym PRO — Treino', text: buildTrainingSummaryText(), url: 'https://martinswillians.github.io/WgymPro/' });
     } else {
+      // Desktop fallback: trigger download
       const a = document.createElement('a');
       a.href = dataUrl;
       a.download = 'treino-willgym.jpg';
       a.click();
     }
-  } catch(e) { if (e.name !== 'AbortError') showToast('⚠️ Não foi possível compartilhar a foto'); }
+  } catch(e) {
+    if (e.name !== 'AbortError') {
+      // Last resort fallback: open the image in a new tab so the user can
+      // long-press to save/share it themselves
+      try {
+        const w = window.open();
+        if (w) { w.document.write(`<img src="${dataUrl}" style="max-width:100%;display:block;">`); }
+        else showToast('⚠️ Salve a imagem manualmente (pressione e segure)');
+      } catch(e2) { showToast('⚠️ Não foi possível compartilhar a foto'); }
+    }
+  }
 }
 
 // ── Generate a workout card image (stats + photo) and share it ──
 async function shareWorkoutCard() {
   const d = _trainingSummaryData;
-  if (!d.trainStart) { showToast('⚠️ Nenhum dado de treino disponível'); return; }
   const photo = _summaryPhotos.length > 0 ? _summaryPhotos[0] : null;
+
+  showToast('🎨 Gerando card...');
+
   const canvas = document.createElement('canvas');
-  canvas.width = 800; canvas.height = photo ? 960 : 560;
+  canvas.width = 800; canvas.height = photo ? 960 : 520;
   const ctx = canvas.getContext('2d');
 
   // Background
   ctx.fillStyle = '#0D0D0F';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Top photo (if any)
+  // Top photo (if any) — load image BEFORE calling share
   let textY = 40;
   if (photo) {
-    const img = new Image();
-    await new Promise(res => { img.onload = res; img.onerror = res; img.src = photo.dataUrl; });
-    ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(40, 40, 720, 400, 16);
-    ctx.clip();
-    // Cover-fit the image
-    const iw = img.width, ih = img.height;
-    const scale = Math.max(720/iw, 400/ih);
-    const dw = iw*scale, dh = ih*scale;
-    ctx.drawImage(img, 40+(720-dw)/2, 40+(400-dh)/2, dw, dh);
-    ctx.restore();
-    // Gradient overlay so text is readable
-    const grad = ctx.createLinearGradient(0, 300, 0, 440);
-    grad.addColorStop(0, 'rgba(13,13,15,0)');
-    grad.addColorStop(1, 'rgba(13,13,15,0.85)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(40, 40, 720, 400);
+    await new Promise(res => {
+      const img = new Image();
+      img.onload = () => {
+        ctx.save();
+        ctx.beginPath();
+        // roundRect may not be available in all mobile browsers — use fallback
+        if (ctx.roundRect) { ctx.roundRect(40, 40, 720, 400, 16); }
+        else { ctx.rect(40, 40, 720, 400); }
+        ctx.clip();
+        const iw = img.width, ih = img.height;
+        const scale = Math.max(720/iw, 400/ih);
+        const dw = iw*scale, dh = ih*scale;
+        ctx.drawImage(img, 40+(720-dw)/2, 40+(400-dh)/2, dw, dh);
+        ctx.restore();
+        const grad = ctx.createLinearGradient(0, 300, 0, 440);
+        grad.addColorStop(0, 'rgba(13,13,15,0)');
+        grad.addColorStop(1, 'rgba(13,13,15,0.88)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(40, 40, 720, 400);
+        res();
+      };
+      img.onerror = res;
+      img.src = photo.dataUrl;
+    });
     textY = 460;
   }
 
-  // Logo/title
+  // Brand
   ctx.fillStyle = '#FF3D25';
-  ctx.font = 'bold 28px system-ui, sans-serif';
+  ctx.font = 'bold 26px system-ui, sans-serif';
   ctx.fillText('Will Gym PRO', 40, textY);
-  textY += 40;
+  textY += 38;
 
+  // Title
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 36px system-ui, sans-serif';
+  ctx.font = 'bold 34px system-ui, sans-serif';
   ctx.fillText((d.group || 'Treino') + ' — Concluído! 🏆', 40, textY);
-  textY += 48;
+  textY += 46;
 
-  // Stats row
+  // Stats cards
   const stats = [
-    ['⏱', d.durationStr, 'Duração'],
-    ['💪', String(d.exCount), 'Exercícios'],
-    ['🏋️', d.totalVol > 999 ? (d.totalVol/1000).toFixed(1)+'t' : d.totalVol+'kg', 'Volume'],
+    ['⏱', d.durationStr || '--', 'Duração'],
+    ['💪', String(d.exCount || 0), 'Exercícios'],
+    ['🏋️', d.totalVol > 999 ? (d.totalVol/1000).toFixed(1)+'t' : (d.totalVol||0)+'kg', 'Volume'],
   ];
   stats.forEach((s, i) => {
     const x = 40 + i * 247;
     ctx.fillStyle = '#1A1A2E';
     ctx.beginPath();
-    ctx.roundRect(x, textY, 227, 90, 12);
+    if (ctx.roundRect) { ctx.roundRect(x, textY, 227, 86, 10); }
+    else { ctx.rect(x, textY, 227, 86); }
     ctx.fill();
     ctx.fillStyle = '#FF3D25';
-    ctx.font = 'bold 32px system-ui, sans-serif';
-    ctx.fillText(s[0] + ' ' + s[1], x + 14, textY + 42);
+    ctx.font = 'bold 28px system-ui, sans-serif';
+    ctx.fillText(s[0] + ' ' + s[1], x + 12, textY + 38);
     ctx.fillStyle = '#8A9BBF';
-    ctx.font = '14px system-ui, sans-serif';
-    ctx.fillText(s[2], x + 14, textY + 70);
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillText(s[2], x + 12, textY + 65);
   });
-  textY += 108;
+  textY += 104;
 
-  // PRs if any
+  // PRs
   if (d.prs && d.prs.length > 0) {
     ctx.fillStyle = '#FFB800';
-    ctx.font = 'bold 18px system-ui, sans-serif';
-    ctx.fillText('🏅 Novos PRs: ' + d.prs.map(p => p.split(' ')[0]).join(', '), 40, textY);
-    textY += 34;
+    ctx.font = 'bold 17px system-ui, sans-serif';
+    ctx.fillText('🏅 PRs: ' + d.prs.map(p => p.split(' ')[0]).join(', '), 40, textY);
+    textY += 32;
   }
 
   // Footer
-  ctx.fillStyle = '#555';
-  ctx.font = '13px system-ui, sans-serif';
-  ctx.fillText('martinswillians.github.io/WgymPro', 40, canvas.height - 20);
+  ctx.fillStyle = '#444';
+  ctx.font = '12px system-ui, sans-serif';
+  ctx.fillText('martinswillians.github.io/WgymPro', 40, canvas.height - 18);
 
-  // Share
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  // Convert to data URL and share — shareSingleWorkoutPhoto handles the
+  // atob conversion and navigator.share() call with minimal async gap
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
   await shareSingleWorkoutPhoto(dataUrl);
 }
 
