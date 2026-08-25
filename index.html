@@ -7336,97 +7336,145 @@ async function shareSingleWorkoutPhoto(dataUrl) {
 // ── Generate a workout card image (stats + photo) and share it ──
 async function shareWorkoutCard() {
   const d = _trainingSummaryData;
-  const photo = _summaryPhotos.length > 0 ? _summaryPhotos[0] : null;
+  const photos = _summaryPhotos; // up to 4
+  const n = photos.length;
 
   showToast('🎨 Gerando card...');
 
+  // ── Layout plan ──────────────────────────────────────────
+  // Width: 800px always.
+  // Photo grid (if any photos):
+  //   1 photo  → full-width 800×440
+  //   2 photos → side by side 396×320 each, gap 8
+  //   3 photos → top full 800×280 + two below 396×180 each
+  //   4 photos → 2×2 grid 396×220 each, gap 8
+  // Stats section: ~160px
+  // PRs row (optional): ~40px
+  // Footer: 40px
+  // Total height computed dynamically.
+
+  const W = 800;
+  const PAD = 40;
+  const GAP = 8;
+  const STATS_H = 160; // brand + title + stat cards
+  const FOOTER_H = 40;
+  const PR_H = d.prs && d.prs.length > 0 ? 44 : 0;
+
+  let photoGridH = 0;
+  if (n === 1) photoGridH = 440;
+  else if (n === 2) photoGridH = 320;
+  else if (n === 3) photoGridH = 280 + GAP + 180;
+  else if (n === 4) photoGridH = 220 + GAP + 220;
+
+  const TOTAL_H = (n > 0 ? PAD + photoGridH + PAD : PAD) + STATS_H + PR_H + FOOTER_H;
+
   const canvas = document.createElement('canvas');
-  canvas.width = 800; canvas.height = photo ? 960 : 520;
+  canvas.width = W;
+  canvas.height = TOTAL_H;
   const ctx = canvas.getContext('2d');
 
   // Background
   ctx.fillStyle = '#0D0D0F';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, W, TOTAL_H);
 
-  // Top photo (if any) — load image BEFORE calling share
-  let textY = 40;
-  if (photo) {
+  // ── Helper: draw one photo fitted into a rect ──
+  const drawPhoto = async (src, x, y, w, h, radius = 12) => {
     await new Promise(res => {
       const img = new Image();
       img.onload = () => {
         ctx.save();
         ctx.beginPath();
-        // roundRect may not be available in all mobile browsers — use fallback
-        if (ctx.roundRect) { ctx.roundRect(40, 40, 720, 400, 16); }
-        else { ctx.rect(40, 40, 720, 400); }
+        if (ctx.roundRect) ctx.roundRect(x, y, w, h, radius);
+        else ctx.rect(x, y, w, h);
         ctx.clip();
-        const iw = img.width, ih = img.height;
-        const scale = Math.max(720/iw, 400/ih);
-        const dw = iw*scale, dh = ih*scale;
-        ctx.drawImage(img, 40+(720-dw)/2, 40+(400-dh)/2, dw, dh);
+        const scale = Math.max(w / img.width, h / img.height);
+        const dw = img.width * scale, dh = img.height * scale;
+        ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
         ctx.restore();
-        const grad = ctx.createLinearGradient(0, 300, 0, 440);
-        grad.addColorStop(0, 'rgba(13,13,15,0)');
-        grad.addColorStop(1, 'rgba(13,13,15,0.88)');
-        ctx.fillStyle = grad;
-        ctx.fillRect(40, 40, 720, 400);
         res();
       };
       img.onerror = res;
-      img.src = photo.dataUrl;
+      img.src = src;
     });
-    textY = 460;
+  };
+
+  // ── Draw photo grid ──
+  let textY = PAD;
+  if (n > 0) {
+    const halfW = Math.floor((W - PAD * 2 - GAP) / 2); // 356px each
+
+    if (n === 1) {
+      await drawPhoto(photos[0].dataUrl, PAD, PAD, W - PAD * 2, 440);
+      // Gradient overlay for readability of text below
+      const g = ctx.createLinearGradient(0, PAD + 300, 0, PAD + 440);
+      g.addColorStop(0, 'rgba(13,13,15,0)');
+      g.addColorStop(1, 'rgba(13,13,15,0.82)');
+      ctx.fillStyle = g;
+      ctx.fillRect(PAD, PAD, W - PAD * 2, 440);
+    } else if (n === 2) {
+      await drawPhoto(photos[0].dataUrl, PAD, PAD, halfW, 320);
+      await drawPhoto(photos[1].dataUrl, PAD + halfW + GAP, PAD, halfW, 320);
+    } else if (n === 3) {
+      await drawPhoto(photos[0].dataUrl, PAD, PAD, W - PAD * 2, 280);
+      await drawPhoto(photos[1].dataUrl, PAD, PAD + 280 + GAP, halfW, 180);
+      await drawPhoto(photos[2].dataUrl, PAD + halfW + GAP, PAD + 280 + GAP, halfW, 180);
+    } else { // 4
+      await drawPhoto(photos[0].dataUrl, PAD, PAD, halfW, 220);
+      await drawPhoto(photos[1].dataUrl, PAD + halfW + GAP, PAD, halfW, 220);
+      await drawPhoto(photos[2].dataUrl, PAD, PAD + 220 + GAP, halfW, 220);
+      await drawPhoto(photos[3].dataUrl, PAD + halfW + GAP, PAD + 220 + GAP, halfW, 220);
+    }
+
+    textY = PAD + photoGridH + PAD;
   }
 
+  // ── Stats section ──
   // Brand
   ctx.fillStyle = '#FF3D25';
-  ctx.font = 'bold 26px system-ui, sans-serif';
-  ctx.fillText('Will Gym PRO', 40, textY);
-  textY += 38;
+  ctx.font = 'bold 24px system-ui, sans-serif';
+  ctx.fillText('Will Gym PRO', PAD, textY + 24);
 
   // Title
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 34px system-ui, sans-serif';
-  ctx.fillText((d.group || 'Treino') + ' — Concluído! 🏆', 40, textY);
-  textY += 46;
+  ctx.font = 'bold 32px system-ui, sans-serif';
+  ctx.fillText((d.group || 'Treino') + ' — Concluído! 🏆', PAD, textY + 62);
 
-  // Stats cards
+  // Stat cards
   const stats = [
     ['⏱', d.durationStr || '--', 'Duração'],
     ['💪', String(d.exCount || 0), 'Exercícios'],
-    ['🏋️', d.totalVol > 999 ? (d.totalVol/1000).toFixed(1)+'t' : (d.totalVol||0)+'kg', 'Volume'],
+    ['🏋️', (d.totalVol || 0) > 999 ? ((d.totalVol||0)/1000).toFixed(1)+'t' : (d.totalVol||0)+'kg', 'Volume'],
   ];
+  const cardW = Math.floor((W - PAD * 2 - GAP * 2) / 3); // ~240px
   stats.forEach((s, i) => {
-    const x = 40 + i * 247;
+    const sx = PAD + i * (cardW + GAP);
+    const sy = textY + 76;
     ctx.fillStyle = '#1A1A2E';
     ctx.beginPath();
-    if (ctx.roundRect) { ctx.roundRect(x, textY, 227, 86, 10); }
-    else { ctx.rect(x, textY, 227, 86); }
+    if (ctx.roundRect) ctx.roundRect(sx, sy, cardW, 76, 10);
+    else ctx.rect(sx, sy, cardW, 76);
     ctx.fill();
     ctx.fillStyle = '#FF3D25';
-    ctx.font = 'bold 28px system-ui, sans-serif';
-    ctx.fillText(s[0] + ' ' + s[1], x + 12, textY + 38);
+    ctx.font = 'bold 24px system-ui, sans-serif';
+    ctx.fillText(s[0] + ' ' + s[1], sx + 12, sy + 34);
     ctx.fillStyle = '#8A9BBF';
-    ctx.font = '13px system-ui, sans-serif';
-    ctx.fillText(s[2], x + 12, textY + 65);
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillText(s[2], sx + 12, sy + 58);
   });
-  textY += 104;
 
-  // PRs
-  if (d.prs && d.prs.length > 0) {
+  // PRs row
+  if (PR_H > 0) {
     ctx.fillStyle = '#FFB800';
-    ctx.font = 'bold 17px system-ui, sans-serif';
-    ctx.fillText('🏅 PRs: ' + d.prs.map(p => p.split(' ')[0]).join(', '), 40, textY);
-    textY += 32;
+    ctx.font = 'bold 16px system-ui, sans-serif';
+    ctx.fillText('🏅 PRs: ' + d.prs.map(p => p.split(' ')[0]).join(', '), PAD, textY + 76 + 76 + 20);
   }
 
   // Footer
   ctx.fillStyle = '#444';
   ctx.font = '12px system-ui, sans-serif';
-  ctx.fillText('martinswillians.github.io/WgymPro', 40, canvas.height - 18);
+  ctx.fillText('martinswillians.github.io/WgymPro', PAD, TOTAL_H - 14);
 
-  // Convert to data URL and share — shareSingleWorkoutPhoto handles the
-  // atob conversion and navigator.share() call with minimal async gap
+  // Share
   const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
   await shareSingleWorkoutPhoto(dataUrl);
 }
