@@ -7336,27 +7336,31 @@ async function shareSingleWorkoutPhoto(dataUrl) {
 // ── Generate a workout card image (stats + photo) and share it ──
 async function shareWorkoutCard() {
   const d = _trainingSummaryData;
-  const photos = _summaryPhotos; // up to 4
+  const photos = _summaryPhotos;
   const n = photos.length;
 
   showToast('🎨 Gerando card...');
 
-  // ── Layout plan ──────────────────────────────────────────
-  // Width: 800px always.
-  // Photo grid (if any photos):
-  //   1 photo  → full-width 800×440
-  //   2 photos → side by side 396×320 each, gap 8
-  //   3 photos → top full 800×280 + two below 396×180 each
-  //   4 photos → 2×2 grid 396×220 each, gap 8
-  // Stats section: ~160px
-  // PRs row (optional): ~40px
-  // Footer: 40px
-  // Total height computed dynamically.
+  // ── Pre-load all images in parallel BEFORE touching the canvas ──
+  // On iOS Safari, setting img.src inside a canvas drawing routine can
+  // silently hang (neither onload nor onerror fires) when the source is a
+  // canvas-generated JPEG data URL — especially in sequence. Loading them
+  // all upfront in parallel, with a per-image timeout fallback, prevents
+  // the entire card generation from freezing.
+  const loadImage = (dataUrl) => new Promise(resolve => {
+    const img = new Image();
+    const timer = setTimeout(() => resolve(null), 4000); // 4s timeout per image
+    img.onload = () => { clearTimeout(timer); resolve(img); };
+    img.onerror = () => { clearTimeout(timer); resolve(null); };
+    img.src = dataUrl;
+  });
+
+  const loadedImgs = await Promise.all(photos.map(p => loadImage(p.dataUrl)));
 
   const W = 800;
   const PAD = 40;
   const GAP = 8;
-  const STATS_H = 160; // brand + title + stat cards
+  const STATS_H = 160;
   const FOOTER_H = 40;
   const PR_H = d.prs && d.prs.length > 0 ? 44 : 0;
 
@@ -7373,79 +7377,65 @@ async function shareWorkoutCard() {
   canvas.height = TOTAL_H;
   const ctx = canvas.getContext('2d');
 
-  // Background
   ctx.fillStyle = '#0D0D0F';
   ctx.fillRect(0, 0, W, TOTAL_H);
 
-  // ── Helper: draw one photo fitted into a rect ──
-  const drawPhoto = async (src, x, y, w, h, radius = 12) => {
-    await new Promise(res => {
-      const img = new Image();
-      img.onload = () => {
-        ctx.save();
-        ctx.beginPath();
-        if (ctx.roundRect) ctx.roundRect(x, y, w, h, radius);
-        else ctx.rect(x, y, w, h);
-        ctx.clip();
-        const scale = Math.max(w / img.width, h / img.height);
-        const dw = img.width * scale, dh = img.height * scale;
-        ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
-        ctx.restore();
-        res();
-      };
-      img.onerror = res;
-      img.src = src;
-    });
+  // ── Draw one pre-loaded image fitted into a rect (synchronous now) ──
+  const drawImg = (img, x, y, w, h, radius = 12) => {
+    if (!img) return; // timed-out image — just leave that slot dark
+    ctx.save();
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, radius);
+    else ctx.rect(x, y, w, h);
+    ctx.clip();
+    const scale = Math.max(w / img.width, h / img.height);
+    const dw = img.width * scale, dh = img.height * scale;
+    ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+    ctx.restore();
   };
 
-  // ── Draw photo grid ──
+  // ── Draw photo grid (all synchronous after pre-load) ──
   let textY = PAD;
   if (n > 0) {
-    const halfW = Math.floor((W - PAD * 2 - GAP) / 2); // 356px each
-
+    const halfW = Math.floor((W - PAD * 2 - GAP) / 2);
     if (n === 1) {
-      await drawPhoto(photos[0].dataUrl, PAD, PAD, W - PAD * 2, 440);
-      // Gradient overlay for readability of text below
+      drawImg(loadedImgs[0], PAD, PAD, W - PAD * 2, 440);
       const g = ctx.createLinearGradient(0, PAD + 300, 0, PAD + 440);
       g.addColorStop(0, 'rgba(13,13,15,0)');
       g.addColorStop(1, 'rgba(13,13,15,0.82)');
       ctx.fillStyle = g;
       ctx.fillRect(PAD, PAD, W - PAD * 2, 440);
     } else if (n === 2) {
-      await drawPhoto(photos[0].dataUrl, PAD, PAD, halfW, 320);
-      await drawPhoto(photos[1].dataUrl, PAD + halfW + GAP, PAD, halfW, 320);
+      drawImg(loadedImgs[0], PAD, PAD, halfW, 320);
+      drawImg(loadedImgs[1], PAD + halfW + GAP, PAD, halfW, 320);
     } else if (n === 3) {
-      await drawPhoto(photos[0].dataUrl, PAD, PAD, W - PAD * 2, 280);
-      await drawPhoto(photos[1].dataUrl, PAD, PAD + 280 + GAP, halfW, 180);
-      await drawPhoto(photos[2].dataUrl, PAD + halfW + GAP, PAD + 280 + GAP, halfW, 180);
-    } else { // 4
-      await drawPhoto(photos[0].dataUrl, PAD, PAD, halfW, 220);
-      await drawPhoto(photos[1].dataUrl, PAD + halfW + GAP, PAD, halfW, 220);
-      await drawPhoto(photos[2].dataUrl, PAD, PAD + 220 + GAP, halfW, 220);
-      await drawPhoto(photos[3].dataUrl, PAD + halfW + GAP, PAD + 220 + GAP, halfW, 220);
+      drawImg(loadedImgs[0], PAD, PAD, W - PAD * 2, 280);
+      drawImg(loadedImgs[1], PAD, PAD + 280 + GAP, halfW, 180);
+      drawImg(loadedImgs[2], PAD + halfW + GAP, PAD + 280 + GAP, halfW, 180);
+    } else {
+      drawImg(loadedImgs[0], PAD, PAD, halfW, 220);
+      drawImg(loadedImgs[1], PAD + halfW + GAP, PAD, halfW, 220);
+      drawImg(loadedImgs[2], PAD, PAD + 220 + GAP, halfW, 220);
+      drawImg(loadedImgs[3], PAD + halfW + GAP, PAD + 220 + GAP, halfW, 220);
     }
-
     textY = PAD + photoGridH + PAD;
   }
 
   // ── Stats section ──
-  // Brand
   ctx.fillStyle = '#FF3D25';
   ctx.font = 'bold 24px system-ui, sans-serif';
   ctx.fillText('Will Gym PRO', PAD, textY + 24);
 
-  // Title
   ctx.fillStyle = '#FFFFFF';
   ctx.font = 'bold 32px system-ui, sans-serif';
   ctx.fillText((d.group || 'Treino') + ' — Concluído! 🏆', PAD, textY + 62);
 
-  // Stat cards
   const stats = [
     ['⏱', d.durationStr || '--', 'Duração'],
     ['💪', String(d.exCount || 0), 'Exercícios'],
     ['🏋️', (d.totalVol || 0) > 999 ? ((d.totalVol||0)/1000).toFixed(1)+'t' : (d.totalVol||0)+'kg', 'Volume'],
   ];
-  const cardW = Math.floor((W - PAD * 2 - GAP * 2) / 3); // ~240px
+  const cardW = Math.floor((W - PAD * 2 - GAP * 2) / 3);
   stats.forEach((s, i) => {
     const sx = PAD + i * (cardW + GAP);
     const sy = textY + 76;
@@ -7462,21 +7452,23 @@ async function shareWorkoutCard() {
     ctx.fillText(s[2], sx + 12, sy + 58);
   });
 
-  // PRs row
   if (PR_H > 0) {
     ctx.fillStyle = '#FFB800';
     ctx.font = 'bold 16px system-ui, sans-serif';
     ctx.fillText('🏅 PRs: ' + d.prs.map(p => p.split(' ')[0]).join(', '), PAD, textY + 76 + 76 + 20);
   }
 
-  // Footer
   ctx.fillStyle = '#444';
   ctx.font = '12px system-ui, sans-serif';
   ctx.fillText('martinswillians.github.io/WgymPro', PAD, TOTAL_H - 14);
 
-  // Share
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
-  await shareSingleWorkoutPhoto(dataUrl);
+  try {
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+    await shareSingleWorkoutPhoto(dataUrl);
+  } catch(e) {
+    showToast('⚠️ Não foi possível gerar o card. Tente compartilhar as fotos individualmente.');
+    console.error('[WGym] shareWorkoutCard failed:', e);
+  }
 }
 
 function buildTrainingSummaryText() {
