@@ -6624,8 +6624,12 @@ function undoDeleteSerie() {
 // ═══════════════════════════════════════════════════════
 // CONCLUDE
 // ═══════════════════════════════════════════════════════
+let _concludingExercise = false; // guard against double-tap registering twice
+
 function concludeExercise() {
+  if(_concludingExercise){return;}
   if(!state.selectedEx||!state.currentSeries.length){showToast('Registre pelo menos uma série');return;}
+  _concludingExercise = true;
 
   // Capture exercise name immediately — must not change mid-function
   const exerciseName = state.selectedEx;
@@ -6689,6 +6693,9 @@ function concludeExercise() {
   renderGroupGrid(); updateActiveBar(); updateTrainStatus();
   if(settings.vibration&&navigator.vibrate)navigator.vibrate([100,50,100,50,200]);
   showCongratsModal(exerciseName, seriesCount, totalVol, rm, isNewPR, isAerobic);
+  // Safety reset: if the congrats modal somehow fails to open and closeCongratsModal
+  // never fires, this prevents the button from being permanently locked
+  setTimeout(() => { _concludingExercise = false; }, 5000);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -6858,6 +6865,7 @@ function skipToNextExercise() {
 }
 
 function closeCongratsModal() {
+  _concludingExercise = false; // reset guard so next exercise can be concluded
   document.getElementById('congratsOverlay').classList.remove('show');
   // Check if there are more exercises queued (from multi-select)
   const sel = state.sheetSelected || [];
