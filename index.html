@@ -3354,6 +3354,79 @@ select.form-input option { background: var(--card2); color: var(--text); }
 // ═══════════════════════════════════════════════════════
 // TRAIN STATUS — 3-state: Aguardando Início / Treinando / Treino Finalizado
 // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+// STORAGE GUARD (v36)
+// Workout photos live in localStorage (~5MB quota shared with history).
+// When the quota was hit, localStorage.setItem('wgym_history') threw in the
+// middle of concludeExercise(): the exercise stayed only in memory, the
+// congrats modal never opened and, after a reload, the exercise was gone.
+// This wrapper frees space (oldest photos first, then caches) and retries,
+// so critical writes (history, session) always win over photos.
+// ═══════════════════════════════════════════════════════
+const PHOTO_STORE_KEY = 'wgym_workout_photos';
+const PHOTO_BUDGET_CHARS = 2500000; // ~2.5MB max for all photos combined
+function _isQuotaError(e) {
+  return !!e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014);
+}
+// Remove the oldest photo sessions until the photo store fits the budget.
+// protectKey = session that must never be evicted (the one being edited).
+function _trimPhotoStore(maxChars, protectKey) {
+  try {
+    const raw = localStorage.getItem(PHOTO_STORE_KEY);
+    if (!raw) return false;
+    const all = JSON.parse(raw);
+    const keys = Object.keys(all).sort(); // ISO date keys → oldest first
+    let changed = false;
+    let size = JSON.stringify(all).length;
+    for (const k of keys) {
+      if (size <= maxChars) break;
+      if (k === protectKey) continue;
+      delete all[k]; changed = true;
+      size = JSON.stringify(all).length;
+    }
+    if (changed) Storage.prototype.setItem.call(localStorage, PHOTO_STORE_KEY, JSON.stringify(all));
+    return changed;
+  } catch (e) { return false; }
+}
+function _freeStorageSpace(skipKey) {
+  let freed = false;
+  // 1) drop old photos (keep newest session), progressively
+  for (const budget of [1200000, 600000, 250000, 0]) {
+    if (_trimPhotoStore(budget, null)) freed = true;
+    if (budget === 0 && localStorage.getItem(PHOTO_STORE_KEY) && skipKey !== PHOTO_STORE_KEY) {
+      try { localStorage.removeItem(PHOTO_STORE_KEY); freed = true; } catch(e) {}
+    }
+  }
+  // 2) drop rebuildable per-exercise caches (warmExerciseCacheFromHistory recreates them)
+  try {
+    const rm = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('wgym_excache_')) rm.push(k);
+    }
+    rm.forEach(k => localStorage.removeItem(k));
+    if (rm.length) freed = true;
+  } catch(e) {}
+  return freed;
+}
+(function installStorageGuard() {
+  try {
+    const orig = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(k, v) {
+      try { return orig.call(this, k, v); }
+      catch (e) {
+        if (this !== window.localStorage || !_isQuotaError(e)) throw e;
+        // Photos are the lowest-priority data: if the photo store itself is
+        // what doesn't fit, trim old sessions inside the new value first.
+        if (k === PHOTO_STORE_KEY) throw e;
+        console.warn('[WGym] localStorage full — freeing space for', k);
+        _freeStorageSpace(k);
+        return orig.call(this, k, v); // may still throw; callers handle it
+      }
+    };
+  } catch (e) { console.warn('[WGym] storage guard not installed', e); }
+})();
+
 function updateTrainStatus(forceState) {
   const el = document.getElementById('trainStatus');
   if (!el) return;
@@ -3371,7 +3444,7 @@ function updateTrainStatus(forceState) {
     el.textContent = 'Treinando'; el.className = 'status-chip chip-green';
     return;
   }
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayKey = localDateKey();
   const hadWorkoutToday = history.some(h => {
     const d = new Date(h.date);
     const dk = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
@@ -3511,6 +3584,10 @@ let _cloudSyncEnabled = false;
 let _cloudPullInProgress = false;
 const _cloudSyncQueue = new Set();
 let _cloudSyncTimer = null;
+// v36: keys written locally since page load. A background pull that finishes
+// AFTER the person concluded an exercise used to replace localStorage with the
+// (older) cloud copy → the exercise vanished from the history.
+const _localDirtyKeys = new Set();
 
 window.addEventListener('wgym-firebase-ready', () => {
   _fbReady = true;
@@ -3534,6 +3611,7 @@ window.addEventListener('wgym-firebase-load-failed', () => {
 // workout updates history + users + settings almost at once). We batch
 // those into a single Firestore write per key, ~1s after the last change.
 function queueCloudSync(key) {
+  _localDirtyKeys.add(key); // remember local writes even if we can't push right now
   if (!_cloudSyncEnabled || !_fbReady || !_fbUser || _cloudPullInProgress) return;
   if (!navigator.onLine) return; // Firestore SDK queues writes for us, but skip if obviously offline
   _cloudSyncQueue.add(key);
@@ -3561,9 +3639,20 @@ async function flushCloudSyncQueue() {
 
 // Pull all known keys from Firestore into localStorage. Called right after
 // login, before the rest of the app reads localStorage into memory.
-async function pullCloudDataIntoLocalStorage() {
+// Merge two history arrays by entry id (newest first). Local entries win on conflict.
+function _mergeHistoryArrays(localArr, cloudArr) {
+  const map = new Map();
+  (Array.isArray(cloudArr) ? cloudArr : []).forEach(h => { if (h && h.id != null) map.set(String(h.id), h); });
+  (Array.isArray(localArr) ? localArr : []).forEach(h => { if (h && h.id != null) map.set(String(h.id), h); });
+  return Array.from(map.values()).sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
+// protectLocal=true (background re-sync): keys changed locally during this
+// session are merged/kept instead of being overwritten by the cloud copy.
+async function pullCloudDataIntoLocalStorage(protectLocal) {
   if (!_fbUser) return;
   _cloudPullInProgress = true;
+  const repush = [];
   try {
     // Read the whole users/{uid}/data collection in one go. This automatically
     // covers fixed keys (history, settings, plans...) AND dynamic per-item keys
@@ -3574,7 +3663,21 @@ async function pullCloudDataIntoLocalStorage() {
       try {
         const data = docSnap.data();
         const key = docSnap.id;
-        const toStore = typeof data.value === 'string' ? data.value : JSON.stringify(data.value);
+        let toStore = typeof data.value === 'string' ? data.value : JSON.stringify(data.value);
+        if (protectLocal && _localDirtyKeys.has(key)) {
+          if (key === 'wgym_history') {
+            // union of cloud + local so the exercise just concluded survives
+            let localArr = [];
+            try { localArr = JSON.parse(localStorage.getItem('wgym_history') || '[]'); } catch(e) {}
+            let cloudArr = [];
+            try { cloudArr = JSON.parse(toStore); } catch(e) {}
+            toStore = JSON.stringify(_mergeHistoryArrays(localArr, cloudArr));
+            repush.push(key);
+          } else {
+            repush.push(key); // keep local version, push it up afterwards
+            return;
+          }
+        }
         localStorage.setItem(key, toStore);
       } catch (e) {
         console.warn('[WGym Cloud] Failed to apply pulled doc', docSnap.id, e);
@@ -3584,6 +3687,8 @@ async function pullCloudDataIntoLocalStorage() {
     console.warn('[WGym Cloud] Failed to pull cloud data, falling back to local data', e);
   } finally {
     _cloudPullInProgress = false;
+    // push anything we protected/merged (or that was written during the pull)
+    try { new Set([...repush, ..._localDirtyKeys]).forEach(k => { if (repush.includes(k)) queueCloudSync(k); }); } catch(e) {}
   }
 }
 
@@ -4813,6 +4918,9 @@ function goPage(p, tabEl) {
   if (p==='config') { renderSettings(); renderIMCCard(); }
   if (p==='configuracoes') renderSettings();
   if (p==='planos') { renderPlanos(); }
+  // v36: remember which screen the person is on, so "Continuar treino"
+  // brings them back to exactly where they stopped.
+  try { if (state.activeTraining && !_restoringSession) saveActiveSession(); } catch(e) {}
 }
 
 // ═══════════════════════════════════════════════════════
@@ -6624,18 +6732,18 @@ function undoDeleteSerie() {
 // ═══════════════════════════════════════════════════════
 // CONCLUDE
 // ═══════════════════════════════════════════════════════
-let _concludingExercise = false; // guard against double-tap registering twice
-
+let _concludeBusy = false;
 function concludeExercise() {
-  if(_concludingExercise){return;}
   if(!state.selectedEx||!state.currentSeries.length){showToast('Registre pelo menos uma série');return;}
-  _concludingExercise = true;
+  if (_concludeBusy) return;           // ignore double taps while finishing
+  _concludeBusy = true;
+  setTimeout(() => { _concludeBusy = false; }, 800);
 
   // Capture exercise name immediately — must not change mid-function
   const exerciseName = state.selectedEx;
 
   const notes=document.getElementById('exNotes').value;
-  if(notes) { localStorage.setItem('wgym_notes_'+exerciseName,notes); queueCloudSync('wgym_notes_'+exerciseName); }
+  if(notes) { try { localStorage.setItem('wgym_notes_'+exerciseName,notes); } catch(e) { console.warn('[WGym] notes not saved', e); } queueCloudSync('wgym_notes_'+exerciseName); }
   const isFreeMulti = state.mode === 'free' && state.freeUserIds && state.freeUserIds.length > 1;
 
   // Always use resolveActiveUid() — same function used by getLastEntry — guarantees consistency
@@ -6682,20 +6790,32 @@ function concludeExercise() {
     }
   }
 
-  history.unshift({id:Date.now(),date:new Date().toISOString(),exercise:exerciseName,group:state.group,mode:state.mode,p1name:state.p1name,p2name:state.p2name,userId:uid||null,userId2:uid2||null,groupUserIds,series:[...state.currentSeries],notes,trainStart:state.trainStart,isAerobic});
-  saveHistory();
-  saveActiveSession(); // update snapshot after exercise concludes (currentSeries cleared)
+  // v36: build the entry, then update ALL in-memory state first, so a failure
+  // in any later step (storage, rendering) can never leave a half-concluded exercise.
+  const entry = {id:Date.now(),date:new Date().toISOString(),exercise:exerciseName,group:state.group,mode:state.mode,p1name:state.p1name,p2name:state.p2name,userId:uid||null,userId2:uid2||null,groupUserIds,series:[...state.currentSeries],notes,trainStart:state.trainStart,isAerobic};
+  history.unshift(entry);
   if(!state.completedEx[state.group])state.completedEx[state.group]=[];
   if(!state.completedEx[state.group].includes(exerciseName))state.completedEx[state.group].push(exerciseName);
-  state.currentSeries=[]; stopTimer();
-  document.getElementById('timerBox').classList.remove('show');
-  document.getElementById('seriesLogCard').style.display='none';
-  renderGroupGrid(); updateActiveBar(); updateTrainStatus();
-  if(settings.vibration&&navigator.vibrate)navigator.vibrate([100,50,100,50,200]);
-  showCongratsModal(exerciseName, seriesCount, totalVol, rm, isNewPR, isAerobic);
-  // Safety reset: if the congrats modal somehow fails to open and closeCongratsModal
-  // never fires, this prevents the button from being permanently locked
-  setTimeout(() => { _concludingExercise = false; }, 5000);
+  state.currentSeries=[];
+  try { stopTimer(); } catch(e) { console.error(e); }
+
+  // Persist (each step isolated — none of them may abort the flow)
+  try { saveHistory(); } catch(e) { console.error('[WGym] saveHistory', e); }
+  try { saveActiveSession(); } catch(e) { console.error('[WGym] saveActiveSession', e); } // snapshot now reflects the concluded exercise
+
+  // UI refresh (each step isolated so the congrats modal ALWAYS opens)
+  try { document.getElementById('timerBox').classList.remove('show'); } catch(e) {}
+  try { document.getElementById('seriesLogCard').style.display='none'; } catch(e) {}
+  try { renderGroupGrid(); } catch(e) { console.error(e); }
+  try { updateActiveBar(); } catch(e) { console.error(e); }
+  try { updateTrainStatus(); } catch(e) { console.error(e); }
+  try { if(settings.vibration&&navigator.vibrate)navigator.vibrate([100,50,100,50,200]); } catch(e) {}
+  try { showCongratsModal(exerciseName, seriesCount, totalVol, rm, isNewPR, isAerobic); }
+  catch(e) {
+    console.error('[WGym] showCongratsModal', e);
+    try { showToast('✅ ' + exerciseName + ' concluído!'); } catch(_) {}
+    try { closeCongratsModal(); } catch(_) {}
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -6865,7 +6985,6 @@ function skipToNextExercise() {
 }
 
 function closeCongratsModal() {
-  _concludingExercise = false; // reset guard so next exercise can be concluded
   document.getElementById('congratsOverlay').classList.remove('show');
   // Check if there are more exercises queued (from multi-select)
   const sel = state.sheetSelected || [];
@@ -6886,10 +7005,14 @@ function closeCongratsModal() {
     prefillLastLoad(nextEx);
     renderQueueBar();
     showToast('➡️ Próximo: ' + nextEx);
+    try { saveActiveSession(); } catch(e) {}
   } else {
     // No more queued, go back to treino
     state.sheetSelected = [];
-    setTimeout(() => goPage('treino'), 200);
+    state.selectedEx = null;           // nothing in progress anymore
+    try { document.getElementById('exerciseCard').style.display = 'none'; } catch(e) {}
+    goPage('treino');
+    try { saveActiveSession(); } catch(e) {}
   }
 }
 
@@ -7191,6 +7314,15 @@ function saveWorkoutPhotos(sessionKey, photos) {
     const keys = Object.keys(all);
     if (keys.length > 60) {
       keys.sort().slice(0, keys.length - 60).forEach(k => delete all[k]);
+    }
+    // v36: hard budget — evict OLDEST sessions (never the current one) so
+    // photos can't fill localStorage and break saving the workout history.
+    let _sz = JSON.stringify(all).length;
+    for (const k of Object.keys(all).sort()) {
+      if (_sz <= PHOTO_BUDGET_CHARS) break;
+      if (k === sessionKey) continue;
+      delete all[k];
+      _sz = JSON.stringify(all).length;
     }
     localStorage.setItem('wgym_workout_photos', JSON.stringify(all));
     // Sync a lightweight index (not the full photos) to Firestore to avoid
@@ -8581,7 +8713,17 @@ function deleteHistItem(hId) {
   showToast('🗑 ' + exName + ' removido');
 }
 
-function saveHistory(){localStorage.setItem('wgym_history',JSON.stringify(history));queueCloudSync('wgym_history');}
+function saveHistory(){
+  let ok = true;
+  try { localStorage.setItem('wgym_history',JSON.stringify(history)); }
+  catch(e) {
+    ok = false;
+    console.error('[WGym] saveHistory failed:', e);
+    try { showToast('⚠️ Sem espaço no aparelho — histórico não foi salvo. Libere espaço e tente de novo.', 5000); } catch(_) {}
+  }
+  queueCloudSync('wgym_history');
+  return ok;
+}
 
 function resetAll(){if(confirm('Apagar TODOS os dados?')){if(confirm('Confirmar? Isso não pode ser desfeito.')){localStorage.clear();history=[];users=[];settings={vibration:true,autoProgress:true,weekGoal:4,theme:'dark'};state.customExByGroup={};applyTheme('dark');doLogout();}}}
 
@@ -10480,6 +10622,8 @@ function saveActiveSession() {
     activeP1Id:    state.activeP1Id,
     activeP2Id:    state.activeP2Id,
     groupUserIds:  state.groupUserIds || [],
+    freeUserIds:   state.freeUserIds || [],
+    page:          (document.querySelector('.page.active') || {}).id || null,
     // Recent history entries from this session (for context)
     sessionEntries: state.trainStart
       ? history.filter(h => h.trainStart === state.trainStart).map(h => h.id)
@@ -10497,8 +10641,8 @@ function getActiveSession() {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const snap = JSON.parse(raw);
-    // Only restore if saved within last 4 hours
-    if (!snap.savedAt || Date.now() - snap.savedAt > 4 * 3600 * 1000) {
+    // Only restore if saved within last 12 hours
+    if (!snap.savedAt || Date.now() - snap.savedAt > 12 * 3600 * 1000) {
       clearActiveSession();
       return null;
     }
@@ -10507,6 +10651,7 @@ function getActiveSession() {
 }
 
 function checkSessionRecovery() {
+  if (state.activeTraining) return; // already training in this tab — nothing to recover
   const snap = getActiveSession();
   if (!snap) return;
 
@@ -10538,9 +10683,12 @@ Deseja continuar de onde parou?`;
   if (tim) tim.textContent = timeStr;
 }
 
+let _restoringSession = false;
 function restoreSession() {
   const snap = getActiveSession();
   if (!snap) return;
+  _restoringSession = true;
+  try {
   const el = document.getElementById('sessionRecoveryOverlay');
   if (el) el.classList.remove('show');
 
@@ -10559,6 +10707,39 @@ function restoreSession() {
   state.activeP1Id      = snap.activeP1Id;
   state.activeP2Id      = snap.activeP2Id;
   state.groupUserIds    = snap.groupUserIds  || [];
+  if (snap.freeUserIds && snap.freeUserIds.length) state.freeUserIds = snap.freeUserIds;
+
+  // The history is the source of truth for what is already done: rebuild
+  // completedEx from it so nothing concluded ever appears as "pending".
+  const doneNames = new Set();
+  if (snap.trainStart) {
+    history.filter(h => h && h.trainStart === snap.trainStart).forEach(h => {
+      doneNames.add(h.exercise);
+      const g = h.group || snap.group;
+      if (!state.completedEx[g]) state.completedEx[g] = [];
+      if (!state.completedEx[g].includes(h.exercise)) state.completedEx[g].push(h.exercise);
+    });
+  }
+
+  // Never resume on an exercise that was already concluded (unless the
+  // person has NEW unsaved series on it). Move to the next queued one, or
+  // fall back to the workout screen.
+  let ex = state.selectedEx;
+  if (ex && doneNames.has(ex) && state.currentSeries.length === 0) {
+    const q = state.sheetSelected || [];
+    const next = q.find(x => !doneNames.has(x));
+    ex = next || null;
+    state.selectedEx = ex;
+  } else if (ex && doneNames.has(ex) && state.currentSeries.length > 0) {
+    // stale snapshot (series belong to an exercise already in history): drop them
+    const dupe = history.find(h => h && h.trainStart === snap.trainStart && h.exercise === ex);
+    if (dupe && JSON.stringify((dupe.series||[]).map(x=>x.ts)) === JSON.stringify(state.currentSeries.map(x=>x.ts))) {
+      state.currentSeries = [];
+      const q = state.sheetSelected || [];
+      ex = q.find(x => !doneNames.has(x)) || null;
+      state.selectedEx = ex;
+    }
+  }
 
   // Resume UI
   startTrainTimer();
@@ -10567,19 +10748,33 @@ function restoreSession() {
   renderGroupGrid();
   renderWeekGoalBar();
 
-  if (snap.selectedEx) {
-    goPage('exercicio');
-    prefillLastLoad(snap.selectedEx);
+  // Go back to the screen where the person stopped
+  let page = snap.page ? snap.page.replace(/^page-/, '') : null;
+  if (page === 'exercicio' && !ex) page = 'treino';
+  if (!page) page = ex ? 'exercicio' : 'treino';
+  if (!document.getElementById('page-' + page)) page = ex ? 'exercicio' : 'treino';
+
+  if (ex) {
+    const card = document.getElementById('exerciseCard');
+    if (card) card.style.display = 'block';
+  }
+  goPage(page);
+  if (page === 'exercicio' && ex) {
+    prefillLastLoad(ex);
     renderQueueBar();
-    if (snap.currentSeries.length > 0) {
+    if (state.currentSeries.length > 0) {
       renderSeriesLog();
       document.getElementById('seriesLogCard').style.display = 'block';
     }
     showToast('⚡ Treino restaurado! Continue de onde parou.');
   } else {
-    goPage('treino');
+    if (ex) { try { renderQueueBar(); } catch(e) {} }
     showToast('⚡ Treino restaurado!');
   }
+  } finally {
+    _restoringSession = false;
+  }
+  try { saveActiveSession(); } catch(e) {}
 }
 
 function discardSession() {
@@ -11803,7 +11998,9 @@ if (currentAccount) {
       window.removeEventListener('wgym-firebase-ready', bootCloudResync);
       window.FB.onAuthStateChanged(async (user) => {
         if (user && user.uid === currentAccount.id) {
-          await pullCloudDataIntoLocalStorage();
+          if (window._bootCloudPullDone) return; // once per page load
+          window._bootCloudPullDone = true;
+          await pullCloudDataIntoLocalStorage(true); // protect local writes made meanwhile
           reloadLocalStateAfterCloudPull();
           // Re-render the screens that depend on data that may have just changed
           renderDashboard();
