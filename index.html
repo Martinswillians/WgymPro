@@ -3260,6 +3260,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="summary-ex-list" id="sumExList"></div>
 
       <div class="summary-share-title">Compartilhar treino completo</div>
+      <div id="sumShareAttachHint" style="display:none;text-align:center;font-size:12px;color:var(--muted);margin:-4px 0 8px;"></div>
       <div class="summary-share-grid">
         <button class="share-btn share-whatsapp" onclick="shareTrainingSummary('whatsapp')"><span class="sb-icon">💬</span>WhatsApp</button>
         <button class="share-btn share-email" onclick="shareTrainingSummary('email')"><span class="sb-icon">✉️</span>E-mail</button>
@@ -3267,7 +3268,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
         <button class="share-btn share-more" onclick="shareTrainingSummary('native')"><span class="sb-icon">↗️</span>Mais</button>
       </div>
       <button id="sumShareCardBtn" class="sum-share-card-btn" onclick="shareWorkoutCard()" style="display:none;">
-        🖼️ Gerar card com foto e compartilhar
+        🖼️ Compartilhar card + todas as fotos
       </button>
       <button class="summary-close-btn" onclick="closeSummaryModal()">✓ Fechar</button>
     </div>
@@ -3314,6 +3315,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="day-share-section">Exercícios realizados</div>
       <div class="day-share-ex-list" id="dayShareExList"></div>
       <div class="day-share-section">Compartilhar</div>
+      <div id="dayShareHint" style="display:none;margin:0 0 10px;"></div>
       <div class="day-share-btns">
         <button class="share-btn share-whatsapp" onclick="shareDaySummary('whatsapp')"><span class="sb-icon">💬</span>WhatsApp</button>
         <button class="share-btn share-email" onclick="shareDaySummary('email')"><span class="sb-icon">✉️</span>E-mail</button>
@@ -3427,7 +3429,19 @@ function _freeStorageSpace(skipKey) {
   } catch (e) { console.warn('[WGym] storage guard not installed', e); }
 })();
 
+// v37: single source of truth for the two "Encerrar treino" buttons (header ■
+// and the one at the bottom of the Treino screen). Both are visible whenever a
+// training is active — regardless of which exercise/screen the person is on.
+function syncStopButtons() {
+  const on = !!state.activeTraining;
+  const card = document.getElementById('exerciseCard');
+  if (card) card.style.display = on ? 'block' : 'none';
+  const sb = document.getElementById('stopTrainBtn');
+  if (sb) sb.style.display = on ? 'flex' : 'none';
+}
+
 function updateTrainStatus(forceState) {
+  try { syncStopButtons(); } catch(e) {}
   const el = document.getElementById('trainStatus');
   if (!el) return;
   if (forceState) {
@@ -4918,6 +4932,7 @@ function goPage(p, tabEl) {
   if (p==='config') { renderSettings(); renderIMCCard(); }
   if (p==='configuracoes') renderSettings();
   if (p==='planos') { renderPlanos(); }
+  try { syncStopButtons(); } catch(e) {}
   // v36: remember which screen the person is on, so "Continuar treino"
   // brings them back to exactly where they stopped.
   try { if (state.activeTraining && !_restoringSession) saveActiveSession(); } catch(e) {}
@@ -4972,6 +4987,7 @@ function setMode(m) {
   if (m==='group') renderGroupUserPills();
   renderPartnerUserPills();
   updateModeChip();
+  try { syncStopButtons(); } catch(e) {} // setMode hides exerciseCard — re-show it if a training is running
 }
 
 // ═══════════════════════════════════════════════════════
@@ -7010,7 +7026,6 @@ function closeCongratsModal() {
     // No more queued, go back to treino
     state.sheetSelected = [];
     state.selectedEx = null;           // nothing in progress anymore
-    try { document.getElementById('exerciseCard').style.display = 'none'; } catch(e) {}
     goPage('treino');
     try { saveActiveSession(); } catch(e) {}
   }
@@ -7404,6 +7419,13 @@ function renderSummaryPhotos() {
   if (hint) hint.textContent = count === 0 ? 'Registre o momento do seu treino!' : count === 4 ? '✅ 4 fotos (limite máximo)' : `${count}/4 fotos`;
   const cardBtn = document.getElementById('sumShareCardBtn');
   if (cardBtn) cardBtn.style.display = count > 0 ? 'flex' : 'none';
+  const attHint = document.getElementById('sumShareAttachHint');
+  if (attHint) { attHint.style.display = count > 0 ? 'block' : 'none'; attHint.textContent = '📎 ' + count + (count === 1 ? ' foto será anexada' : ' fotos serão anexadas') + ' + card do treino'; }
+  // pre-build card + files so the next tap can share instantly (iOS needs share() right after the tap)
+  clearTimeout(window._sumPrefetchT);
+  if (count > 0 && document.getElementById('summaryOverlay').classList.contains('show')) {
+    window._sumPrefetchT = setTimeout(() => _prefetchShareFiles('summary', _summaryPhotos.map(p => p.dataUrl), _summaryCardOpts()), 250);
+  }
 }
 
 function openSummaryPhotoFull(id) {
@@ -7435,7 +7457,8 @@ function openSummaryPhotoFull(id) {
 // call causes the browser to consider it "not user-initiated" and block it.
 // Strategy: do all async work first, then call share() as the LAST step
 // with no awaits between the blob creation and the share() call.
-async function shareSingleWorkoutPhoto(dataUrl) {
+async function shareSingleWorkoutPhoto(dataUrl, customText) {
+  const _txt = (customText !== undefined) ? customText : buildTrainingSummaryText();
   try {
     // Convert data URL to blob without fetch — atob is synchronous and
     // doesn't lose the user-gesture context on iOS the way fetch does.
@@ -7449,10 +7472,10 @@ async function shareSingleWorkoutPhoto(dataUrl) {
 
     if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
       // share() called immediately after blob creation — no async gap
-      await navigator.share({ files: [file], title: 'Will Gym PRO — Treino', text: buildTrainingSummaryText() });
+      await navigator.share({ files: [file], title: 'Will Gym PRO — Treino', text: _txt });
     } else if (navigator.share) {
       // Fallback: share without file (just text + url), works on more browsers
-      await navigator.share({ title: 'Will Gym PRO — Treino', text: buildTrainingSummaryText(), url: 'https://martinswillians.github.io/WgymPro/' });
+      await navigator.share({ title: 'Will Gym PRO — Treino', text: _txt, url: 'https://martinswillians.github.io/WgymPro/' });
     } else {
       // Desktop fallback: trigger download
       const a = document.createElement('a');
@@ -7473,60 +7496,61 @@ async function shareSingleWorkoutPhoto(dataUrl) {
   }
 }
 
-// ── Generate a workout card image (stats + photo) and share it ──
-async function shareWorkoutCard() {
-  const d = _trainingSummaryData;
-  const photos = _summaryPhotos;
-  const n = photos.length;
+// ═══════════════════════════════════════════════════════
+// v37 — SHARE WITH ATTACHMENTS (card + ALL photos)
+// • mailto: / wa.me links can NEVER carry attachments. The only way to attach
+//   files from a web app is the Web Share API (the native share sheet, where
+//   Mail / WhatsApp / Drive etc. receive the images).
+// • iOS/Safari only allows navigator.share() right after a tap. Building the
+//   card takes a moment, so it is PRE-BUILT in the background (prefetch) and
+//   the tap just shares the ready files.
+// ═══════════════════════════════════════════════════════
+function _dataUrlToFile(dataUrl, name) {
+  const parts = dataUrl.split(',');
+  const mime = (parts[0].match(/:(.*?);/) || [])[1] || 'image/jpeg';
+  const bin = atob(parts[1]);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new File([new Blob([arr], { type: mime })], name, { type: mime });
+}
 
-  showToast('🎨 Gerando card...');
-
-  // ── Pre-load all images in parallel BEFORE touching the canvas ──
-  // On iOS Safari, setting img.src inside a canvas drawing routine can
-  // silently hang (neither onload nor onerror fires) when the source is a
-  // canvas-generated JPEG data URL — especially in sequence. Loading them
-  // all upfront in parallel, with a per-image timeout fallback, prevents
-  // the entire card generation from freezing.
-  const loadImage = (dataUrl) => new Promise(resolve => {
+function _loadImageSafe(dataUrl) {
+  return new Promise(resolve => {
     const img = new Image();
-    const timer = setTimeout(() => resolve(null), 4000); // 4s timeout per image
+    const timer = setTimeout(() => resolve(null), 4000);
     img.onload = () => { clearTimeout(timer); resolve(img); };
     img.onerror = () => { clearTimeout(timer); resolve(null); };
     img.src = dataUrl;
   });
+}
 
-  const loadedImgs = await Promise.all(photos.map(p => loadImage(p.dataUrl)));
+// opts: { title, stats:[[icon,value,label]x3], prs:[names], photos:[dataUrl] (max 4 drawn) }
+async function buildWorkoutCardDataUrl(opts) {
+  const photos = (opts.photos || []).slice(0, 4);
+  const n = photos.length;
+  const loadedImgs = await Promise.all(photos.map(_loadImageSafe));
 
-  const W = 800;
-  const PAD = 40;
-  const GAP = 8;
-  const STATS_H = 160;
-  const FOOTER_H = 40;
-  const PR_H = d.prs && d.prs.length > 0 ? 44 : 0;
-
+  const W = 800, PAD = 40, GAP = 8, STATS_H = 160, FOOTER_H = 40;
+  const prs = opts.prs || [];
+  const PR_H = prs.length > 0 ? 44 : 0;
   let photoGridH = 0;
   if (n === 1) photoGridH = 440;
   else if (n === 2) photoGridH = 320;
   else if (n === 3) photoGridH = 280 + GAP + 180;
   else if (n === 4) photoGridH = 220 + GAP + 220;
-
   const TOTAL_H = (n > 0 ? PAD + photoGridH + PAD : PAD) + STATS_H + PR_H + FOOTER_H;
 
   const canvas = document.createElement('canvas');
-  canvas.width = W;
-  canvas.height = TOTAL_H;
+  canvas.width = W; canvas.height = TOTAL_H;
   const ctx = canvas.getContext('2d');
-
   ctx.fillStyle = '#0D0D0F';
   ctx.fillRect(0, 0, W, TOTAL_H);
 
-  // ── Draw one pre-loaded image fitted into a rect (synchronous now) ──
   const drawImg = (img, x, y, w, h, radius = 12) => {
-    if (!img) return; // timed-out image — just leave that slot dark
+    if (!img) return;
     ctx.save();
     ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(x, y, w, h, radius);
-    else ctx.rect(x, y, w, h);
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, radius); else ctx.rect(x, y, w, h);
     ctx.clip();
     const scale = Math.max(w / img.width, h / img.height);
     const dw = img.width * scale, dh = img.height * scale;
@@ -7534,17 +7558,14 @@ async function shareWorkoutCard() {
     ctx.restore();
   };
 
-  // ── Draw photo grid (all synchronous after pre-load) ──
   let textY = PAD;
   if (n > 0) {
     const halfW = Math.floor((W - PAD * 2 - GAP) / 2);
     if (n === 1) {
       drawImg(loadedImgs[0], PAD, PAD, W - PAD * 2, 440);
       const g = ctx.createLinearGradient(0, PAD + 300, 0, PAD + 440);
-      g.addColorStop(0, 'rgba(13,13,15,0)');
-      g.addColorStop(1, 'rgba(13,13,15,0.82)');
-      ctx.fillStyle = g;
-      ctx.fillRect(PAD, PAD, W - PAD * 2, 440);
+      g.addColorStop(0, 'rgba(13,13,15,0)'); g.addColorStop(1, 'rgba(13,13,15,0.82)');
+      ctx.fillStyle = g; ctx.fillRect(PAD, PAD, W - PAD * 2, 440);
     } else if (n === 2) {
       drawImg(loadedImgs[0], PAD, PAD, halfW, 320);
       drawImg(loadedImgs[1], PAD + halfW + GAP, PAD, halfW, 320);
@@ -7561,52 +7582,152 @@ async function shareWorkoutCard() {
     textY = PAD + photoGridH + PAD;
   }
 
-  // ── Stats section ──
   ctx.fillStyle = '#FF3D25';
   ctx.font = 'bold 24px system-ui, sans-serif';
   ctx.fillText('Will Gym PRO', PAD, textY + 24);
 
+  // Title — shrink the font until it fits the card width
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 32px system-ui, sans-serif';
-  ctx.fillText((d.group || 'Treino') + ' — Concluído! 🏆', PAD, textY + 62);
+  let tSize = 32;
+  const title = opts.title || 'Treino — Concluído! 🏆';
+  do { ctx.font = 'bold ' + tSize + 'px system-ui, sans-serif'; tSize -= 2; }
+  while (ctx.measureText(title).width > W - PAD * 2 && tSize > 16);
+  ctx.fillText(title, PAD, textY + 62);
 
-  const stats = [
-    ['⏱', d.durationStr || '--', 'Duração'],
-    ['💪', String(d.exCount || 0), 'Exercícios'],
-    ['🏋️', (d.totalVol || 0) > 999 ? ((d.totalVol||0)/1000).toFixed(1)+'t' : (d.totalVol||0)+'kg', 'Volume'],
-  ];
+  const stats = opts.stats || [];
   const cardW = Math.floor((W - PAD * 2 - GAP * 2) / 3);
-  stats.forEach((s, i) => {
-    const sx = PAD + i * (cardW + GAP);
-    const sy = textY + 76;
+  stats.slice(0, 3).forEach((st, i) => {
+    const sx = PAD + i * (cardW + GAP), sy = textY + 76;
     ctx.fillStyle = '#1A1A2E';
     ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(sx, sy, cardW, 76, 10);
-    else ctx.rect(sx, sy, cardW, 76);
+    if (ctx.roundRect) ctx.roundRect(sx, sy, cardW, 76, 10); else ctx.rect(sx, sy, cardW, 76);
     ctx.fill();
     ctx.fillStyle = '#FF3D25';
     ctx.font = 'bold 24px system-ui, sans-serif';
-    ctx.fillText(s[0] + ' ' + s[1], sx + 12, sy + 34);
+    ctx.fillText(st[0] + ' ' + st[1], sx + 12, sy + 34);
     ctx.fillStyle = '#8A9BBF';
     ctx.font = '12px system-ui, sans-serif';
-    ctx.fillText(s[2], sx + 12, sy + 58);
+    ctx.fillText(st[2], sx + 12, sy + 58);
   });
 
   if (PR_H > 0) {
     ctx.fillStyle = '#FFB800';
     ctx.font = 'bold 16px system-ui, sans-serif';
-    ctx.fillText('🏅 PRs: ' + d.prs.map(p => p.split(' ')[0]).join(', '), PAD, textY + 76 + 76 + 20);
+    // v37: prs are plain names (strings); v35 called .split() on {ex,rm} objects and crashed whenever a PR existed
+    ctx.fillText('🏅 PRs: ' + prs.map(p => String(p).split(' ')[0]).join(', '), PAD, textY + 76 + 76 + 20);
   }
-
   ctx.fillStyle = '#444';
   ctx.font = '12px system-ui, sans-serif';
   ctx.fillText('martinswillians.github.io/WgymPro', PAD, TOTAL_H - 14);
+  return canvas.toDataURL('image/jpeg', 0.88);
+}
 
+// ── File bundle cache (so the tap can call navigator.share immediately) ──
+let _shareFilesCache = null; // { key, files }
+function _shareKey(kind, photos, cardOpts) {
+  return kind + '|' + photos.length + '|' + photos.map(p => p.length + ':' + p.slice(-24)).join(',') + '|' +
+    (cardOpts ? cardOpts.title + JSON.stringify(cardOpts.stats || []) : '');
+}
+async function _buildShareFiles(kind, photos, cardOpts) {
+  const files = [];
   try {
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
-    await shareSingleWorkoutPhoto(dataUrl);
-  } catch(e) {
-    showToast('⚠️ Não foi possível gerar o card. Tente compartilhar as fotos individualmente.');
+    if (cardOpts) {
+      const card = await buildWorkoutCardDataUrl({ ...cardOpts, photos });
+      files.push(_dataUrlToFile(card, 'treino-willgym-card.jpg'));
+    }
+  } catch (e) { console.warn('[WGym] card build failed, sharing photos only', e); }
+  photos.forEach((p, i) => {
+    try { files.push(_dataUrlToFile(p, 'treino-willgym-foto-' + (i + 1) + '.jpg')); } catch (e) {}
+  });
+  _shareFilesCache = { key: _shareKey(kind, photos, cardOpts), files };
+  return files;
+}
+function _prefetchShareFiles(kind, photos, cardOpts) {
+  if (!photos || !photos.length) return;
+  const key = _shareKey(kind, photos, cardOpts);
+  if (_shareFilesCache && _shareFilesCache.key === key) return;
+  _buildShareFiles(kind, photos, cardOpts).catch(() => {});
+}
+
+function _openMailto(url) { window.location.href = url; }
+function _downloadFiles(files) {
+  files.forEach((f, i) => setTimeout(() => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(f); a.download = f.name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }, i * 350));
+}
+
+// Share text + card + ALL photos. method: 'whatsapp' | 'email' | 'native'
+async function shareWithAttachments(kind, method, title, text, photos, cardOpts) {
+  const plain = text.replace(/\*/g, '').replace(/_/g, '');
+  const key = _shareKey(kind, photos, cardOpts);
+  const cached = (_shareFilesCache && _shareFilesCache.key === key) ? _shareFilesCache.files : null;
+  let files = cached;
+  if (!files) { showToast('🎨 Preparando card e fotos...'); files = await _buildShareFiles(kind, photos, cardOpts); }
+
+  if (files.length && navigator.share && navigator.canShare && navigator.canShare({ files })) {
+    try {
+      await navigator.share({ files, title, text: plain });
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      if (e && e.name === 'NotAllowedError' && !cached) {
+        // Browser wanted the tap to be closer to share(). Files are cached now — second tap is instant.
+        showToast('✅ Fotos prontas — toque novamente para compartilhar', 4500);
+        return;
+      }
+      console.warn('[WGym] share with files failed, using fallback', e);
+    }
+  }
+  // ── Fallback: browser can't share files (desktop / old browsers) ──
+  if (files.length) {
+    _downloadFiles(files);
+    showToast('📎 Fotos salvas no aparelho — anexe-as na mensagem', 4500);
+  }
+  setTimeout(() => {
+    if (method === 'email') _openMailto('mailto:?subject=' + encodeURIComponent(title) + '&body=' + encodeURIComponent(plain));
+    else if (method === 'whatsapp') window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(text), '_blank');
+  }, files.length ? 900 : 0);
+}
+
+// ── Contexts ──
+function _summaryCardOpts() {
+  const d = _trainingSummaryData || {};
+  const vol = d.totalVol || 0;
+  return {
+    title: (d.group || 'Treino') + ' — Concluído! 🏆',
+    stats: [
+      ['⏱', d.durationStr || '--', 'Duração'],
+      ['💪', String(d.exCount || 0), 'Exercícios'],
+      ['🏋️', vol > 999 ? (vol / 1000).toFixed(1) + 't' : vol + 'kg', 'Volume'],
+    ],
+    prs: (d.prs || []).map(p => (p && p.ex) ? p.ex : String(p)),
+  };
+}
+function _dayCardOpts(d) {
+  const vol = d.totalVol || 0;
+  return {
+    title: d.dayLabel + ' — Treino 🏆',
+    stats: [
+      ['💪', String(d.exItems.length), 'Exercícios'],
+      ['🔢', String(d.totalSeries || 0), 'Séries'],
+      ['🏋️', vol > 999 ? (vol / 1000).toFixed(1) + 't' : vol + 'kg', 'Volume'],
+    ],
+    prs: (d.prs || []).map(p => p.ex),
+  };
+}
+
+// "Gerar card" button in the summary: card + all photos
+async function shareWorkoutCard() {
+  const d = _trainingSummaryData;
+  if (!d || !d.trainStart) { showToast('⚠️ Nenhum dado de treino disponível'); return; }
+  const photos = _summaryPhotos.map(p => p.dataUrl);
+  try {
+    await shareWithAttachments('summary', 'native', 'Will Gym PRO — Treino', buildTrainingSummaryText(), photos, _summaryCardOpts());
+  } catch (e) {
+    showToast('⚠️ Não foi possível gerar o card. Tente novamente.');
     console.error('[WGym] shareWorkoutCard failed:', e);
   }
 }
@@ -7644,10 +7765,17 @@ function buildTrainingSummaryText() {
 function shareTrainingSummary(method) {
   const text = buildTrainingSummaryText();
   const title = 'Will Gym — Treino Completo';
+  // v37: with photos, E-mail / WhatsApp / Mais open the native share sheet WITH the card + all photos attached
+  const _photos = (_summaryPhotos || []).map(p => p.dataUrl);
+  if (_photos.length && method !== 'copy') {
+    shareWithAttachments('summary', method, title, text, _photos, _summaryCardOpts());
+    return;
+  }
   if (method === 'whatsapp') {
     window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(text), '_blank');
   } else if (method === 'email') {
-    window.location.href = 'mailto:?subject=' + encodeURIComponent(title) + '&body=' + encodeURIComponent(text);
+    // e-mail has no markdown: strip the *bold* / _italic_ markers (they showed up literally in the mail)
+    window.location.href = 'mailto:?subject=' + encodeURIComponent(title) + '&body=' + encodeURIComponent(text.replace(/\*/g, '').replace(/_/g, ''));
   } else if (method === 'copy') {
     const plain = text.replace(/\*/g, '').replace(/_/g, '');
     navigator.clipboard.writeText(plain)
@@ -7908,9 +8036,28 @@ function openHistoryPhotoFull(sessionKey, photoIndex) {
   actions.style.cssText = 'display:flex;gap:10px;';
 
   const shareBtn = document.createElement('button');
-  shareBtn.textContent = '📤 Compartilhar';
+  shareBtn.textContent = photos.length > 1 ? '📤 Só esta foto' : '📤 Compartilhar';
   shareBtn.style.cssText = 'padding:9px 20px;background:var(--primary);color:white;border:none;border-radius:24px;font-size:13px;font-weight:700;cursor:pointer;';
-  shareBtn.onclick = async (e) => { e.stopPropagation(); await shareSingleWorkoutPhoto(photos[current].dataUrl); };
+  // v37: the text must describe THIS workout (it used the last finished one before)
+  let _ctxText = '', _ctxCard = null, _allUrls = photos.map(p => p.dataUrl), _ctxKey = 'viewer:' + sessionKey, _ctxDayData = null;
+  try {
+    const _ent = history.find(h => h && h.trainStart === sessionKey);
+    if (_ent) {
+      const _dk = (() => { const x = new Date(_ent.date); return localDateKey(x); })();
+      _ctxDayData = computeDayShareData(_dk);
+      _ctxText = buildDaySummaryText();
+      _ctxCard = _dayCardOpts(_ctxDayData);
+    }
+  } catch (e) { console.warn('[WGym] viewer share context', e); }
+  if (!_ctxText) _ctxText = '🏋️ Treino — Will Gym PRO';
+  if (_allUrls.length > 0) _prefetchShareFiles(_ctxKey, _allUrls, _ctxCard);
+
+  shareBtn.onclick = async (e) => { e.stopPropagation(); await shareSingleWorkoutPhoto(photos[current].dataUrl, _ctxText.replace(/\*/g, '').replace(/_/g, '')); };
+
+  const shareAllBtn = document.createElement('button');
+  shareAllBtn.textContent = '📤 Treino + todas as fotos (' + photos.length + ')';
+  shareAllBtn.style.cssText = 'padding:9px 20px;background:var(--success,#2ECC71);color:#0D0D0F;border:none;border-radius:24px;font-size:13px;font-weight:800;cursor:pointer;';
+  shareAllBtn.onclick = (e) => { e.stopPropagation(); shareWithAttachments(_ctxKey, 'native', 'Will Gym — Treino', _ctxText, _allUrls, _ctxCard); };
 
   const deleteBtn = document.createElement('button');
   deleteBtn.textContent = '🗑️ Excluir';
@@ -7929,6 +8076,8 @@ function openHistoryPhotoFull(sessionKey, photoIndex) {
   closeBtn.onclick = (e) => { e.stopPropagation(); document.body.removeChild(overlay); };
 
   if (photos.length > 1) nav.append(prevBtn, counter, nextBtn);
+  actions.style.flexWrap = 'wrap'; actions.style.justifyContent = 'center';
+  if (photos.length > 1) actions.append(shareAllBtn);
   actions.append(shareBtn, deleteBtn, closeBtn);
   overlay.append(img, nav, actions);
   document.body.appendChild(overlay);
@@ -7938,9 +8087,7 @@ function openHistoryPhotoFull(sessionKey, photoIndex) {
 // ─── Day Share Modal ──────────────────────────────────
 let _dayShareData = null;
 
-function openDayShareModal(dayKey, evt) {
-  if (evt) { evt.stopPropagation(); evt.preventDefault(); }
-
+function computeDayShareData(dayKey) {
   const d = new Date(dayKey + 'T12:00:00');
   const WEEKDAYS = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
   const MONTHS = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
@@ -8016,8 +8163,31 @@ function openDayShareModal(dayKey, evt) {
     return names;
   }))];
 
+  // v37: every photo saved for the workout session(s) of that day
+  const _sks = [...new Set(entries.map(h => h.trainStart).filter(Boolean))];
+  const photos = [];
+  _sks.forEach(sk => loadWorkoutPhotos(sk).forEach(p => photos.push(p.dataUrl)));
+
   _dayShareData = { dayKey, dayLabel, dateStr, entries, exItems, prs,
-    totalVol, totalSeries, totalAerobMin, allAthletes };
+    totalVol, totalSeries, totalAerobMin, allAthletes, photos };
+  return _dayShareData;
+}
+
+function openDayShareModal(dayKey, evt) {
+  if (evt) { evt.stopPropagation(); evt.preventDefault(); }
+  computeDayShareData(dayKey);
+  const { dayLabel, dateStr, exItems, totalVol, totalSeries, allAthletes, photos } = _dayShareData;
+
+  // Photos strip + attach hint
+  const strip = document.getElementById('dayShareHint');
+  if (strip) {
+    if (photos.length) {
+      strip.style.display = 'block';
+      strip.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">📎 ${photos.length} ${photos.length === 1 ? 'foto será anexada' : 'fotos serão anexadas'} + card do treino</div>` +
+        `<div style="display:flex;gap:6px;overflow-x:auto;">${photos.slice(0, 8).map(p => `<img src="${p}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;flex:none;">`).join('')}</div>`;
+    } else { strip.style.display = 'none'; strip.innerHTML = ''; }
+  }
+  if (photos.length) _prefetchShareFiles('day:' + dayKey, photos, _dayCardOpts(_dayShareData));
 
   // Populate modal
   document.getElementById('dayShareTitle').textContent = dayLabel;
@@ -8078,6 +8248,12 @@ function buildDaySummaryText() {
 function shareDaySummary(method) {
   const text = buildDaySummaryText();
   const title = 'Treino do Dia — Will Gym';
+  // v37: with photos → native share sheet with the card + ALL photos attached
+  const _dp = (_dayShareData && _dayShareData.photos) || [];
+  if (_dp.length && method !== 'copy') {
+    shareWithAttachments('day:' + _dayShareData.dayKey, method, title, text, _dp, _dayCardOpts(_dayShareData));
+    return;
+  }
   if (method === 'whatsapp') {
     window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(text), '_blank');
   } else if (method === 'email') {
@@ -10754,10 +10930,7 @@ function restoreSession() {
   if (!page) page = ex ? 'exercicio' : 'treino';
   if (!document.getElementById('page-' + page)) page = ex ? 'exercicio' : 'treino';
 
-  if (ex) {
-    const card = document.getElementById('exerciseCard');
-    if (card) card.style.display = 'block';
-  }
+  syncStopButtons();
   goPage(page);
   if (page === 'exercicio' && ex) {
     prefillLastLoad(ex);
