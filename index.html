@@ -332,6 +332,12 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .mode-btn .icon { font-size: 22px; display: block; margin-bottom: 4px; }
 .mode-btn .label { font-size: 12px; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 0.5px; }
 .mode-btn .sub { font-size: 10px; color: var(--muted); }
+.timed-panel{margin:12px 0;padding:16px;border:1.5px solid var(--border);border-radius:var(--radius);background:var(--bg2);text-align:center;}
+.timed-panel.work{border-color:var(--primary);background:var(--primary-light);}
+.timed-panel.rest{border-color:#3b82f6;background:rgba(59,130,246,.12);}
+.timed-phase{font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
+.timed-clock{font-size:56px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1;margin:6px 0;color:var(--text);}
+.timed-sub{font-size:12px;color:var(--muted);margin-bottom:12px;}
 /* ── Suggested mode combo pills ── */
 .sugg-combo-pill {
   display: flex; align-items: center; gap: 6px; padding: 7px 12px;
@@ -2366,6 +2372,11 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="mode-btn" id="modeFree" onclick="setMode('free')"><span class="icon">⚡</span><div class="label">Livre</div><div class="sub">Custom</div></div>
       <div class="mode-btn" id="modeSuggested" onclick="setMode('suggested')"><span class="icon">🤖</span><div class="label">Sugerido</div><div class="sub">IA do app</div></div>
     </div>
+    <div class="user-selector-label" style="margin:12px 0 6px;">Monitoramento de tempo</div>
+    <div class="mode-row" id="timeStyleRow">
+      <div class="mode-btn active" id="tsStandard" onclick="setTimeStyle('standard')"><span class="icon">⏱</span><div class="label">Padrão</div><div class="sub">Série + descanso</div></div>
+      <div class="mode-btn" id="tsTimed" onclick="setTimeStyle('timed')"><span class="icon">⏲️</span><div class="label">Cronometrado</div><div class="sub">Tempo de série e descanso</div></div>
+    </div>
     <div id="soloUserSel" class="user-selector">
       <div class="user-selector-label">Atleta treinando</div>
       <div class="user-pills" id="soloUserPills"></div>
@@ -2681,7 +2692,13 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div id="groupForm" style="display:none;">
         <div id="groupMembersForm"></div>
       </div>
-      <div class="btn-row"><button class="btn btn-primary" onclick="logSerie()">+ Registrar Série</button></div>
+      <div id="timedPanel" class="timed-panel" style="display:none;">
+        <div class="timed-phase" id="timedPhase">Pronto para a série</div>
+        <div class="timed-clock" id="timedClock">00:00</div>
+        <div class="timed-sub" id="timedSub"></div>
+        <button class="btn btn-primary" id="timedMainBtn" onclick="timedMain()" style="width:100%;">▶ Iniciar série</button>
+      </div>
+      <div class="btn-row" id="stdLogRow"><button class="btn btn-primary" onclick="logSerie()">+ Registrar Série</button></div>
     </div>
     <div class="timer-box" id="timerBox">
       <div class="timer-label">⏱ Descansando...</div>
@@ -3241,6 +3258,11 @@ select.form-input option { background: var(--card2); color: var(--text); }
         <div class="summary-meta"><div class="sm-val" id="sumBestRM">—</div><div class="sm-label">Melhor 1RM</div></div>
         <div class="summary-meta"><div class="sm-val" id="sumCalories">~0</div><div class="sm-label">Kcal est.</div></div>
       </div>
+      <div class="summary-meta-row" id="sumTimedRow" style="display:none;margin-top:-4px;">
+        <div class="summary-meta"><div class="sm-val" id="sumTimeTotal">00:00</div><div class="sm-label">Tempo total</div></div>
+        <div class="summary-meta"><div class="sm-val green" id="sumTimeWork">00:00</div><div class="sm-label">Exercitando</div></div>
+        <div class="summary-meta"><div class="sm-val blue" id="sumTimeRest">00:00</div><div class="sm-label">Descanso</div></div>
+      </div>
       <div class="summary-prs" id="sumPRs">
         <div class="summary-prs-title">🥇 Novos Recordes Pessoais</div>
         <div class="summary-prs-list" id="sumPRList"></div>
@@ -3432,6 +3454,115 @@ function _freeStorageSpace(skipKey) {
 // v37: single source of truth for the two "Encerrar treino" buttons (header ■
 // and the one at the bottom of the Treino screen). Both are visible whenever a
 // training is active — regardless of which exercise/screen the person is on.
+// ═══════════════════════════════════════════════════════
+// v38 — TIME MONITORING STYLE  ('standard' | 'timed')
+// standard: register the series, automatic rest countdown (as before)
+// timed:    ▶ Iniciar série → stopwatch → 😮‍💨 Descanso (saves the series with its
+//           duration, starts the rest stopwatch) → ▶ Iniciar próxima série ...
+// Each series stores dur (s) and restDur (s); tid links series saved by the same tap.
+// ═══════════════════════════════════════════════════════
+function _fmtDur(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = sec % 60;
+  const p = n => String(n).padStart(2, '0');
+  return h ? h + ':' + p(m) + ':' + p(x) : p(m) + ':' + p(x);
+}
+function _initTimeStyle() {
+  if (window._tsInit) return;
+  state.timeStyle = localStorage.getItem('wgym_time_style') === 'timed' ? 'timed' : 'standard';
+  state.tPhase = state.tPhase || 'idle';
+  window._tsInit = true;
+  _syncTimeStyleButtons();
+}
+function _syncTimeStyleButtons() {
+  const t = state.timeStyle === 'timed';
+  const a = document.getElementById('tsStandard'), b = document.getElementById('tsTimed');
+  if (a) a.classList.toggle('active', !t);
+  if (b) b.classList.toggle('active', t);
+}
+function setTimeStyle(m) {
+  _initTimeStyle();
+  if (m === state.timeStyle) return;
+  try { timedFinalizePhase(); } catch (e) {}   // never lose a running series when switching
+  state.timeStyle = m;
+  try { localStorage.setItem('wgym_time_style', m); } catch (e) {}
+  if (m !== 'timed') { state.tPhase = 'idle'; state.tStart = 0; }
+  _syncTimeStyleButtons();
+  refreshTimedPanel();
+  showToast(m === 'timed' ? '⏲️ Modo cronometrado: série e descanso medidos' : '⏱ Modo padrão');
+}
+function refreshTimedPanel() {
+  const panel = document.getElementById('timedPanel');
+  if (!panel) return;
+  const aer = state.selectedEx && isAerobicExercise(state.selectedEx, state.group);
+  const on = state.timeStyle === 'timed' && !!state.selectedEx && !aer;
+  panel.style.display = on ? 'block' : 'none';
+  const row = document.getElementById('stdLogRow'); if (row) row.style.display = on ? 'none' : '';
+  if (!on) return;
+  const ph = state.tPhase || 'idle';
+  const el = ph === 'idle' ? 0 : (Date.now() - state.tStart) / 1000;
+  panel.className = 'timed-panel' + (ph === 'idle' ? '' : ' ' + ph);
+  document.getElementById('timedPhase').textContent = ph === 'work' ? '🔥 Série em andamento' : ph === 'rest' ? '😮‍💨 Descansando' : 'Pronto para a série';
+  document.getElementById('timedClock').textContent = _fmtDur(el);
+  document.getElementById('timedMainBtn').textContent = ph === 'work' ? '😮‍💨 Descanso' : ph === 'rest' ? '▶ Iniciar próxima série' : '▶ Iniciar série';
+  const n = new Set(state.currentSeries.map(x => x.tid || x.ts)).size;
+  document.getElementById('timedSub').textContent = n ? 'Séries registradas: ' + n : 'Preencha reps/carga e toque em iniciar';
+}
+function _timedRegister(now) {
+  const dur = Math.max(1, Math.round((now - state.tStart) / 1000));
+  const ids = [...document.querySelectorAll('[id$="series"],[id$="_series"]')].filter(e => e.tagName === 'INPUT' || e.tagName === 'SELECT');
+  const saved = ids.map(e => e.value);
+  ids.forEach(e => e.value = 1);                 // one tap = one series
+  const before = state.currentSeries.length;
+  try { logSerie(); } finally { ids.forEach((e, i) => e.value = saved[i]); }
+  if (state.currentSeries.length === before) return false;
+  const tid = 't' + now;
+  for (let i = before; i < state.currentSeries.length; i++) {
+    const x = state.currentSeries[i]; x.dur = dur; x.tid = tid; x.restDur = 0;
+  }
+  saveActiveSession();
+  return true;
+}
+function _timedCloseRest(now) {
+  const last = state.currentSeries[state.currentSeries.length - 1];
+  if (!last || !last.tid) return;
+  const r = Math.round((now - state.tStart) / 1000);
+  state.currentSeries.forEach(x => { if (x.tid === last.tid) x.restDur = r; });
+}
+function timedMain() {
+  _initTimeStyle();
+  const now = Date.now(), ph = state.tPhase || 'idle';
+  if (ph === 'work') {
+    if (!_timedRegister(now)) return;
+    state.tPhase = 'rest'; state.tStart = now;
+  } else {
+    if (ph === 'rest') _timedCloseRest(now);
+    state.tPhase = 'work'; state.tStart = now;
+  }
+  try { if (settings.vibration && navigator.vibrate) navigator.vibrate(60); } catch (e) {}
+  saveActiveSession(); refreshTimedPanel();
+}
+// Closes whatever phase is running (called when concluding the exercise / switching style)
+function timedFinalizePhase() {
+  if (state.timeStyle !== 'timed') return;
+  const now = Date.now(), ph = state.tPhase;
+  if (ph === 'work') _timedRegister(now);
+  else if (ph === 'rest') _timedCloseRest(now);
+  state.tPhase = 'idle'; state.tStart = 0;
+}
+function _timeTotals(entries) {
+  const seen = new Set(); let work = 0, rest = 0, has = false;
+  (entries || []).forEach(h => (h.series || []).forEach(x => {
+    if (x.dur == null) return;
+    has = true;
+    const k = h.id + ':' + (x.tid || x.ts);
+    if (seen.has(k)) return;                      // dupla/grupo: one tap saves several series
+    seen.add(k); work += x.dur || 0; rest += x.restDur || 0;
+  }));
+  return { work, rest, has };
+}
+setInterval(() => { try { _initTimeStyle(); refreshTimedPanel(); } catch (e) {} }, 250);
+
 function syncStopButtons() {
   const on = !!state.activeTraining;
   const card = document.getElementById('exerciseCard');
@@ -4933,6 +5064,14 @@ function goPage(p, tabEl) {
   if (p==='configuracoes') renderSettings();
   if (p==='planos') { renderPlanos(); }
   try { syncStopButtons(); } catch(e) {}
+  if (p === 'treino' && !window._lastModeApplied) {
+    window._lastModeApplied = true;
+    try {
+      _initTimeStyle();
+      const lm = localStorage.getItem('wgym_last_mode');
+      if (!state.activeTraining && lm && lm !== state.mode && ['alone','partner','group','free','suggested'].includes(lm)) setMode(lm);
+    } catch(e) { console.warn('[WGym] restore last mode', e); }
+  }
   // v36: remember which screen the person is on, so "Continuar treino"
   // brings them back to exactly where they stopped.
   try { if (state.activeTraining && !_restoringSession) saveActiveSession(); } catch(e) {}
@@ -4943,6 +5082,7 @@ function goPage(p, tabEl) {
 // ═══════════════════════════════════════════════════════
 function setMode(m) {
   state.mode = m;
+  try { localStorage.setItem('wgym_last_mode', m); } catch(e) {}
   ['alone','partner','group','free','suggested'].forEach(id => {
     const el = document.getElementById('mode'+id.charAt(0).toUpperCase()+id.slice(1));
     if(el) el.classList.toggle('active', m===id);
@@ -6157,6 +6297,7 @@ function getLastTrainedDate(groupName, userId) {
 // SELECT & FORM
 // ═══════════════════════════════════════════════════════
 function selectEx(ex) {
+  state.tPhase = 'idle'; state.tStart = 0;
   state.selectedEx=ex; state.currentSeries=[];
   renderGroupGrid(); stopTimer();
   document.getElementById('timerBox').classList.remove('show');
@@ -6750,6 +6891,7 @@ function undoDeleteSerie() {
 // ═══════════════════════════════════════════════════════
 let _concludeBusy = false;
 function concludeExercise() {
+  try { timedFinalizePhase(); } catch(e) { console.error(e); }
   if(!state.selectedEx||!state.currentSeries.length){showToast('Registre pelo menos uma série');return;}
   if (_concludeBusy) return;           // ignore double taps while finishing
   _concludeBusy = true;
@@ -7232,6 +7374,15 @@ function showTrainingSummary(entries, exCount, trainStart, group, uid) {
     totalVol, totalSeries, bestRM, bestRMEx, prs, exItems, kcal,
     trainStart: trainStart || new Date().toISOString()
   };
+  const _tt = _timeTotals(entries);
+  _trainingSummaryData.hasTimed = _tt.has; _trainingSummaryData.workSec = _tt.work; _trainingSummaryData.restSec = _tt.rest;
+  const _trow = document.getElementById('sumTimedRow');
+  if (_trow) {
+    _trow.style.display = _tt.has ? 'flex' : 'none';
+    document.getElementById('sumTimeTotal').textContent = durationStr;
+    document.getElementById('sumTimeWork').textContent = _fmtDur(_tt.work);
+    document.getElementById('sumTimeRest').textContent = _fmtDur(_tt.rest);
+  }
 
   // Populate DOM
   document.getElementById('sumEmoji').textContent = emoji;
@@ -7749,6 +7900,7 @@ function buildTrainingSummaryText() {
     `• 🔢 Séries: ${d.totalSeries}`,
     `• 🔥 Kcal estimado: ~${d.kcal}`,
   ];
+  if (d.hasTimed) lines.push(`• ⏲️ Tempo total: ${d.durationStr}`, `• 🔥 Exercitando: ${_fmtDur(d.workSec)}`, `• 😮‍💨 Descanso: ${_fmtDur(d.restSec)}`);
   if (d.bestRM > 0) lines.push(`• 🏆 Melhor 1RM: ~${d.bestRM}kg (${d.bestRMEx})`);
   if (d.prs && d.prs.length > 0) {
     lines.push('', '🥇 *Recordes pessoais:*');
@@ -7799,6 +7951,7 @@ function shareTrainingSummary(method) {
 // TIMERS
 // ═══════════════════════════════════════════════════════
 function startTimer(sec){
+  if (state.timeStyle === 'timed') { stopTimer(); return; } // timed mode measures rest with the stopwatch
   stopTimer(); let r=sec;
   const box=document.getElementById('timerBox'), num=document.getElementById('timerNum');
   box.classList.add('show'); num.textContent=r;
@@ -10799,6 +10952,8 @@ function saveActiveSession() {
     activeP2Id:    state.activeP2Id,
     groupUserIds:  state.groupUserIds || [],
     freeUserIds:   state.freeUserIds || [],
+    tPhase:        state.tPhase || 'idle',
+    tStart:        state.tStart || 0,
     page:          (document.querySelector('.page.active') || {}).id || null,
     // Recent history entries from this session (for context)
     sessionEntries: state.trainStart
@@ -10884,6 +11039,7 @@ function restoreSession() {
   state.activeP2Id      = snap.activeP2Id;
   state.groupUserIds    = snap.groupUserIds  || [];
   if (snap.freeUserIds && snap.freeUserIds.length) state.freeUserIds = snap.freeUserIds;
+  state.tPhase = snap.tPhase || 'idle'; state.tStart = snap.tStart || 0;
 
   // The history is the source of truth for what is already done: rebuild
   // completedEx from it so nothing concluded ever appears as "pending".
