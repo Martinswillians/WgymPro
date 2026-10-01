@@ -3330,10 +3330,16 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="day-share-sub" id="dayShareSub">—</div>
     </div>
     <div class="day-share-body">
+      <div id="dayShareSessions" style="display:none;margin-bottom:12px;"></div>
       <div class="day-share-stats">
         <div class="dss-card"><div class="dss-val" id="dsDuration">—</div><div class="dss-label">Exercícios</div></div>
         <div class="dss-card"><div class="dss-val green" id="dsVolume">0</div><div class="dss-label">Volume kg</div></div>
         <div class="dss-card"><div class="dss-val gold" id="dsSeries">0</div><div class="dss-label">Séries</div></div>
+      </div>
+      <div class="day-share-stats" id="dsTimeRow" style="display:none;margin-top:8px;">
+        <div class="dss-card"><div class="dss-val" id="dsTimeTotal">—</div><div class="dss-label">Tempo total</div></div>
+        <div class="dss-card"><div class="dss-val green" id="dsTimeWork">—</div><div class="dss-label">Exercitando</div></div>
+        <div class="dss-card"><div class="dss-val gold" id="dsTimeRest">—</div><div class="dss-label">Descanso</div></div>
       </div>
       <div class="day-share-section">Exercícios realizados</div>
       <div class="day-share-ex-list" id="dayShareExList"></div>
@@ -3560,6 +3566,15 @@ function timedFinalizePhase() {
   if (ph === 'work') _timedRegister(now);
   else if (ph === 'rest') _timedCloseRest(now);
   state.tPhase = 'idle'; state.tStart = 0;
+}
+function _sessionsTotalSec(entries) {
+  const g = {};
+  (entries || []).forEach(h => { if (h && h.trainStart) (g[h.trainStart] = g[h.trainStart] || []).push(h); });
+  return Object.entries(g).reduce((sum, [start, list]) => {
+    let d = Math.max(...list.map(h => h.trainDur || 0));
+    if (!d) d = Math.round((Math.max(...list.map(h => new Date(h.date).getTime())) - new Date(start).getTime()) / 1000);
+    return sum + (isFinite(d) && d > 0 ? d : 0);
+  }, 0);
 }
 function _timeTotals(entries) {
   const seen = new Set(); let work = 0, rest = 0, has = false;
@@ -7317,6 +7332,7 @@ function showTrainingSummary(entries, exCount, trainStart, group, uid) {
   const mm = String(Math.floor(durationSec / 60)).padStart(2, '0');
   const ss = String(durationSec % 60).padStart(2, '0');
   const durationStr = mm + ':' + ss;
+  try { entries.forEach(h => { if (h.trainDur == null) h.trainDur = durationSec; }); saveHistory(); } catch (e) {}
 
   // Aggregate stats across all exercises
   let totalVol = 0, totalSeries = 0, bestRM = 0, bestRMEx = '';
@@ -7695,12 +7711,13 @@ async function buildWorkoutCardDataUrl(opts) {
   const W = 800, PAD = 40, GAP = 8, STATS_H = 160, FOOTER_H = 40;
   const prs = opts.prs || [];
   const PR_H = prs.length > 0 ? 44 : 0;
+  const STATS2 = (opts.stats2 && opts.stats2.length) ? 84 : 0;
   let photoGridH = 0;
   if (n === 1) photoGridH = 440;
   else if (n === 2) photoGridH = 320;
   else if (n === 3) photoGridH = 280 + GAP + 180;
   else if (n === 4) photoGridH = 220 + GAP + 220;
-  const TOTAL_H = (n > 0 ? PAD + photoGridH + PAD : PAD) + STATS_H + PR_H + FOOTER_H;
+  const TOTAL_H = (n > 0 ? PAD + photoGridH + PAD : PAD) + STATS_H + STATS2 + PR_H + FOOTER_H;
 
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = TOTAL_H;
@@ -7756,10 +7773,9 @@ async function buildWorkoutCardDataUrl(opts) {
   while (ctx.measureText(title).width > W - PAD * 2 && tSize > 16);
   ctx.fillText(title, PAD, textY + 62);
 
-  const stats = opts.stats || [];
   const cardW = Math.floor((W - PAD * 2 - GAP * 2) / 3);
-  stats.slice(0, 3).forEach((st, i) => {
-    const sx = PAD + i * (cardW + GAP), sy = textY + 76;
+  [[opts.stats || [], 0], [opts.stats2 || [], 84]].forEach(([stats, off]) => stats.slice(0, 3).forEach((st, i) => {
+    const sx = PAD + i * (cardW + GAP), sy = textY + 76 + off;
     ctx.fillStyle = '#1A1A2E';
     ctx.beginPath();
     if (ctx.roundRect) ctx.roundRect(sx, sy, cardW, 76, 10); else ctx.rect(sx, sy, cardW, 76);
@@ -7770,13 +7786,15 @@ async function buildWorkoutCardDataUrl(opts) {
     ctx.fillStyle = '#8A9BBF';
     ctx.font = '12px system-ui, sans-serif';
     ctx.fillText(st[2], sx + 12, sy + 58);
-  });
+  }));
 
   if (PR_H > 0) {
     ctx.fillStyle = '#FFB800';
     ctx.font = 'bold 16px system-ui, sans-serif';
     // v37: prs are plain names (strings); v35 called .split() on {ex,rm} objects and crashed whenever a PR existed
-    ctx.fillText('🏅 PRs: ' + prs.map(p => String(p).split(' ')[0]).join(', '), PAD, textY + 76 + 76 + 20);
+    let prTxt = '🏅 PRs: ' + prs.map(p => String(p)).join(', ');
+    while (ctx.measureText(prTxt).width > W - PAD * 2 && prTxt.length > 12) prTxt = prTxt.slice(0, -2).replace(/[,\s]+$/, '') + '…';
+    ctx.fillText(prTxt, PAD, textY + 76 + 76 + 20 + STATS2);
   }
   ctx.fillStyle = '#444';
   ctx.font = '12px system-ui, sans-serif';
@@ -7855,7 +7873,7 @@ async function shareWithAttachments(kind, method, title, text, photos, cardOpts)
 }
 
 // ── Contexts ──
-function _summaryCardOpts() {
+function _summaryCardOptsBase() {
   const d = _trainingSummaryData || {};
   const vol = d.totalVol || 0;
   return {
@@ -7868,7 +7886,7 @@ function _summaryCardOpts() {
     prs: (d.prs || []).map(p => (p && p.ex) ? p.ex : String(p)),
   };
 }
-function _dayCardOpts(d) {
+function _dayCardOptsBase(d) {
   const vol = d.totalVol || 0;
   return {
     title: d.dayLabel + ' — Treino 🏆',
@@ -7881,6 +7899,24 @@ function _dayCardOpts(d) {
   };
 }
 
+function _timesStats(total, work, rest) {
+  return [['⏱', total > 0 || typeof total === 'string' ? (typeof total === 'string' ? total : _fmtDur(total)) : '--', 'Tempo total'],
+          ['🔥', _fmtDur(work), 'Exercitando'], ['😮‍💨', _fmtDur(rest), 'Descanso']];
+}
+function _summaryCardOpts() {
+  const o = _summaryCardOptsBase(), d = _trainingSummaryData || {};
+  if (d.hasTimed) {
+    o.stats = [o.stats[1], ['🔢', String(d.totalSeries || 0), 'Séries'], o.stats[2]];   // Duração moves to the times row
+    o.stats2 = _timesStats(d.durationStr, d.workSec, d.restSec);
+  }
+  return o;
+}
+function _dayCardOpts(d) {
+  const o = _dayCardOptsBase(d);
+  o.title = d.dayLabel + (d.sessionLabel ? ' · ' + d.sessionLabel : '') + ' 🏆';
+  if (d.timed && d.timed.has) o.stats2 = _timesStats(d.timed.total, d.timed.work, d.timed.rest);
+  return o;
+}
 // "Gerar card" button in the summary: card + all photos
 async function shareWorkoutCard() {
   const d = _trainingSummaryData;
@@ -8208,7 +8244,7 @@ function openHistoryPhotoFull(sessionKey, photoIndex) {
     const _ent = history.find(h => h && h.trainStart === sessionKey);
     if (_ent) {
       const _dk = (() => { const x = new Date(_ent.date); return localDateKey(x); })();
-      _ctxDayData = computeDayShareData(_dk);
+      _ctxDayData = computeDayShareData(_dk, sessionKey);
       _ctxText = buildDaySummaryText();
       _ctxCard = _dayCardOpts(_ctxDayData);
     }
@@ -8251,7 +8287,7 @@ function openHistoryPhotoFull(sessionKey, photoIndex) {
 // ─── Day Share Modal ──────────────────────────────────
 let _dayShareData = null;
 
-function computeDayShareData(dayKey) {
+function computeDayShareData(dayKey, sessionKey) {
   const d = new Date(dayKey + 'T12:00:00');
   const WEEKDAYS = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
   const MONTHS = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
@@ -8265,12 +8301,27 @@ function computeDayShareData(dayKey) {
   const dateStr = d.toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric' });
 
   // Collect entries for this day
-  const entries = history.filter(h => {
+  const dayEntries = history.filter(h => {
     if (!h || !h.date) return false;
     const hd = new Date(h.date);
     const hk = hd.getFullYear() + '-' + String(hd.getMonth()+1).padStart(2,'0') + '-' + String(hd.getDate()).padStart(2,'0');
     return hk === dayKey;
   });
+
+  // v40: a day can hold several workouts (different trainStart). Let the person pick one.
+  const _smap = new Map();
+  dayEntries.forEach(h => { const k = h.trainStart || 'none'; if (!_smap.has(k)) _smap.set(k, []); _smap.get(k).push(h); });
+  const sessions = [..._smap.entries()].map(([key, list]) => {
+    const first = list.reduce((a, h) => new Date(h.date) < new Date(a.date) ? h : a, list[0]);
+    const sd = new Date(key !== 'none' ? key : first.date);
+    return { key, count: list.length, start: sd.getTime(),
+      time: String(sd.getHours()).padStart(2, '0') + ':' + String(sd.getMinutes()).padStart(2, '0'),
+      label: [...new Set(list.map(h => h.group).filter(Boolean))].join(' + ') || 'Treino' };
+  }).sort((a, b) => b.start - a.start);
+  let sel = sessionKey;
+  if (!sel || (sel !== 'all' && !_smap.has(sel))) sel = sessions.length > 1 ? sessions[0].key : 'all';
+  const selSession = (sel !== 'all' && sessions.length > 1) ? sessions.find(x => x.key === sel) : null;
+  const entries = sel === 'all' ? dayEntries : _smap.get(sel);
 
   // Build exMap for PR detection
   const exMap = {};
@@ -8332,14 +8383,20 @@ function computeDayShareData(dayKey) {
   const photos = [];
   _sks.forEach(sk => loadWorkoutPhotos(sk).forEach(p => photos.push(p.dataUrl)));
 
+  const _tt = _timeTotals(entries);
   _dayShareData = { dayKey, dayLabel, dateStr, entries, exItems, prs,
-    totalVol, totalSeries, totalAerobMin, allAthletes, photos };
+    totalVol, totalSeries, totalAerobMin, allAthletes, photos,
+    sessions, sel, sessionLabel: selSession ? selSession.label : '', sessionTime: selSession ? selSession.time : '',
+    timed: { has: _tt.has, work: _tt.work, rest: _tt.rest, total: _sessionsTotalSec(entries) } };
   return _dayShareData;
 }
 
-function openDayShareModal(dayKey, evt) {
+function pickDaySession(i) {
+  openDayShareModal(_dayShareData.dayKey, null, i < 0 ? 'all' : _dayShareData.sessions[i].key);
+}
+function openDayShareModal(dayKey, evt, sessionKey) {
   if (evt) { evt.stopPropagation(); evt.preventDefault(); }
-  computeDayShareData(dayKey);
+  computeDayShareData(dayKey, sessionKey);
   const { dayLabel, dateStr, exItems, totalVol, totalSeries, allAthletes, photos } = _dayShareData;
 
   // Photos strip + attach hint
@@ -8351,12 +8408,33 @@ function openDayShareModal(dayKey, evt) {
         `<div style="display:flex;gap:6px;overflow-x:auto;">${photos.slice(0, 8).map(p => `<img src="${p}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;flex:none;">`).join('')}</div>`;
     } else { strip.style.display = 'none'; strip.innerHTML = ''; }
   }
-  if (photos.length) _prefetchShareFiles('day:' + dayKey, photos, _dayCardOpts(_dayShareData));
+  if (photos.length) _prefetchShareFiles('day:' + dayKey + ':' + _dayShareData.sel, photos, _dayCardOpts(_dayShareData));
+
+  // Workout picker (only when the day has more than one workout)
+  const sbox = document.getElementById('dayShareSessions');
+  if (sbox) {
+    const ss = _dayShareData.sessions;
+    if (ss.length > 1) {
+      const chip = (act, txt, i) => `<button onclick="pickDaySession(${i})" style="padding:8px 12px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid ${act ? 'var(--primary)' : 'var(--border)'};background:${act ? 'var(--primary-light)' : 'var(--bg2)'};color:var(--text);">${txt}</button>`;
+      sbox.style.display = 'block';
+      sbox.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">🏋️ ${ss.length} treinos neste dia — escolha qual compartilhar</div><div style="display:flex;flex-wrap:wrap;gap:6px;">` +
+        ss.map((x, i) => chip(_dayShareData.sel === x.key, `🕒 ${x.time} · ${x.label} (${x.count})`, i)).join('') +
+        chip(_dayShareData.sel === 'all', '📅 Dia completo', -1) + '</div>';
+    } else { sbox.style.display = 'none'; sbox.innerHTML = ''; }
+  }
+  const _tm = _dayShareData.timed, _trow = document.getElementById('dsTimeRow');
+  if (_trow) {
+    _trow.style.display = (_tm.total > 0 || _tm.has) ? 'flex' : 'none';
+    document.getElementById('dsTimeTotal').textContent = _tm.total > 0 ? _fmtDur(_tm.total) : '—';
+    document.getElementById('dsTimeWork').textContent = _tm.has ? _fmtDur(_tm.work) : '—';
+    document.getElementById('dsTimeRest').textContent = _tm.has ? _fmtDur(_tm.rest) : '—';
+  }
 
   // Populate modal
   document.getElementById('dayShareTitle').textContent = dayLabel;
-  document.getElementById('dayShareSub').textContent =
-    allAthletes.length > 0 ? '👤 ' + allAthletes.join(', ') : dateStr;
+  document.getElementById('dayShareSub').textContent = _dayShareData.sessionLabel
+    ? '🕒 ' + _dayShareData.sessionTime + ' · ' + _dayShareData.sessionLabel
+    : (allAthletes.length > 0 ? '👤 ' + allAthletes.join(', ') : dateStr);
   document.getElementById('dsDuration').textContent = exItems.length;
   document.getElementById('dsVolume').textContent = totalVol > 999
     ? (totalVol/1000).toFixed(1)+'t' : totalVol > 0 ? totalVol.toLocaleString('pt-BR') : '—';
@@ -8387,7 +8465,7 @@ function buildDaySummaryText() {
   const lines = [
     `🏋️ *${gymName} — Treino do Dia*`,
     '',
-    `📅 *${d.dayLabel}*`,
+    `📅 *${d.dayLabel}${d.sessionLabel ? ' · ' + d.sessionTime + ' · ' + d.sessionLabel : ''}*`,
     d.allAthletes.length > 0 ? `👤 ${d.allAthletes.join(', ')}` : '',
     '',
     '📊 *Resumo:*',
@@ -8395,6 +8473,8 @@ function buildDaySummaryText() {
     `• 📦 Volume: ${d.totalVol > 0 ? d.totalVol.toLocaleString('pt-BR')+'kg' : '—'}`,
     `• 🔢 Séries: ${d.totalSeries}`,
     d.totalAerobMin > 0 ? `• 🏃 Cardio: ${d.totalAerobMin}min` : '',
+    ...(d.timed && d.timed.total > 0 ? [`• ⏱ Tempo total: ${_fmtDur(d.timed.total)}`] : []),
+    ...(d.timed && d.timed.has ? [`• 🔥 Exercitando: ${_fmtDur(d.timed.work)}`, `• 😮‍💨 Descanso: ${_fmtDur(d.timed.rest)}`] : []),
   ].filter(l => l !== undefined);
 
   if (d.prs.length > 0) {
@@ -8415,7 +8495,7 @@ function shareDaySummary(method) {
   // v37: with photos → native share sheet with the card + ALL photos attached
   const _dp = (_dayShareData && _dayShareData.photos) || [];
   if (_dp.length && method !== 'copy') {
-    shareWithAttachments('day:' + _dayShareData.dayKey, method, title, text, _dp, _dayCardOpts(_dayShareData));
+    shareWithAttachments('day:' + _dayShareData.dayKey + ':' + _dayShareData.sel, method, title, text, _dp, _dayCardOpts(_dayShareData));
     return;
   }
   if (method === 'whatsapp') {
