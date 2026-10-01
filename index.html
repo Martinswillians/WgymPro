@@ -2697,6 +2697,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
         <div class="timed-clock" id="timedClock">00:00</div>
         <div class="timed-sub" id="timedSub"></div>
         <button class="btn btn-primary" id="timedMainBtn" onclick="timedMain()" style="width:100%;">▶ Iniciar série</button>
+        <button class="btn" id="timedEndRestBtn" onclick="timedEndRest()" style="width:100%;margin-top:8px;display:none;background:transparent;border:1.5px solid #3b82f6;color:#3b82f6;">✓ Finalizar descanso</button>
       </div>
       <div class="btn-row" id="stdLogRow"><button class="btn btn-primary" onclick="logSerie()">+ Registrar Série</button></div>
     </div>
@@ -3505,16 +3506,18 @@ function refreshTimedPanel() {
   document.getElementById('timedPhase').textContent = ph === 'work' ? '🔥 Série em andamento' : ph === 'rest' ? '😮‍💨 Descansando' : 'Pronto para a série';
   document.getElementById('timedClock').textContent = _fmtDur(el);
   document.getElementById('timedMainBtn').textContent = ph === 'work' ? '😮‍💨 Descanso' : ph === 'rest' ? '▶ Iniciar próxima série' : '▶ Iniciar série';
-  const n = new Set(state.currentSeries.map(x => x.tid || x.ts)).size;
-  document.getElementById('timedSub').textContent = n ? 'Séries registradas: ' + n : 'Preencha reps/carga e toque em iniciar';
+  const endBtn = document.getElementById('timedEndRestBtn');
+  if (endBtn) endBtn.style.display = ph === 'rest' ? 'block' : 'none';
+  const cnt = {}; state.currentSeries.forEach(x => { const k = x.player || '_'; cnt[k] = (cnt[k] || 0) + 1; });
+  const n = Math.max(0, ...Object.values(cnt));
+  const lastRest = [...state.currentSeries].reverse().find(x => x.restDur > 0);
+  document.getElementById('timedSub').textContent = ph === 'work' ? 'Toque em Descanso para registrar a(s) série(s)'
+    : (n ? 'Séries registradas: ' + n : 'Preencha séries/reps/carga e toque em iniciar') + (ph === 'idle' && lastRest ? ' · Último descanso: ' + _fmtDur(lastRest.restDur) : '');
 }
 function _timedRegister(now) {
   const dur = Math.max(1, Math.round((now - state.tStart) / 1000));
-  const ids = [...document.querySelectorAll('[id$="series"],[id$="_series"]')].filter(e => e.tagName === 'INPUT' || e.tagName === 'SELECT');
-  const saved = ids.map(e => e.value);
-  ids.forEach(e => e.value = 1);                 // one tap = one series
   const before = state.currentSeries.length;
-  try { logSerie(); } finally { ids.forEach((e, i) => e.value = saved[i]); }
+  logSerie();                                    // registers exactly the number in "Séries" (same as standard mode)
   if (state.currentSeries.length === before) return false;
   const tid = 't' + now;
   for (let i = before; i < state.currentSeries.length; i++) {
@@ -3541,6 +3544,14 @@ function timedMain() {
   }
   try { if (settings.vibration && navigator.vibrate) navigator.vibrate(60); } catch (e) {}
   saveActiveSession(); refreshTimedPanel();
+}
+// Ends the rest (saves its duration) WITHOUT starting another series
+function timedEndRest() {
+  if (state.tPhase !== 'rest') return;
+  _timedCloseRest(Date.now());
+  state.tPhase = 'idle'; state.tStart = 0;
+  saveActiveSession(); refreshTimedPanel();
+  showToast('✓ Descanso finalizado');
 }
 // Closes whatever phase is running (called when concluding the exercise / switching style)
 function timedFinalizePhase() {
