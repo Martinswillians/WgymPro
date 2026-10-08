@@ -2583,7 +2583,11 @@ select.form-input option { background: var(--card2); color: var(--text); }
         </div>
         <div class="ex-instruction" id="exInstruction"></div>
       </div>
-      <div class="section-title" id="exFormTitle" style="margin-bottom:4px;">Exercício</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <div class="section-title" id="exFormTitle" style="margin-bottom:4px;">Exercício</div>
+        <button id="btnCancelEx" onclick="skipToNextExercise()" title="Cancelar exercício" aria-label="Cancelar exercício" style="flex:none;width:36px;height:36px;border-radius:50%;border:1.5px solid var(--border);background:var(--bg2);color:var(--muted);font-size:16px;cursor:pointer;">✕</button>
+      </div>
+      <div id="lastTrainInfo" style="display:none;font-size:12px;color:var(--muted);margin:0 0 8px;"></div>
       <div class="status-bar">
         <span class="text-sm" style="color:var(--muted);">Grupo: <strong id="exGroup" style="color:var(--text);">–</strong></span>
         <span id="modeChip" class="status-chip chip-red">Solo</span>
@@ -3505,6 +3509,9 @@ function refreshTimedPanel() {
   const on = state.timeStyle === 'timed' && !!state.selectedEx && !aer;
   panel.style.display = on ? 'block' : 'none';
   const row = document.getElementById('stdLogRow'); if (row) row.style.display = on ? 'none' : '';
+  // standard mode registers N series per tap — say so on the button so it is never a surprise
+  const _sb = row && row.querySelector('button'), _sf = document.getElementById('series');
+  if (_sb && _sf && document.activeElement !== _sf) { const N = parseInt(_sf.value) || 1; const t = N > 1 ? '+ Registrar ' + N + ' séries' : '+ Registrar Série'; if (_sb.textContent !== t) _sb.textContent = t; }
   if (!on) return;
   const ph = state.tPhase || 'idle';
   const el = ph === 'idle' ? 0 : (Date.now() - state.tStart) / 1000;
@@ -3517,13 +3524,23 @@ function refreshTimedPanel() {
   const cnt = {}; state.currentSeries.forEach(x => { const k = x.player || '_'; cnt[k] = (cnt[k] || 0) + 1; });
   const n = Math.max(0, ...Object.values(cnt));
   const lastRest = [...state.currentSeries].reverse().find(x => x.restDur > 0);
-  document.getElementById('timedSub').textContent = ph === 'work' ? 'Toque em Descanso para registrar a(s) série(s)'
-    : (n ? 'Séries registradas: ' + n : 'Preencha séries/reps/carga e toque em iniciar') + (ph === 'idle' && lastRest ? ' · Último descanso: ' + _fmtDur(lastRest.restDur) : '');
+  const tgtEl = document.getElementById('series') || document.getElementById('p1series');
+  const tgt = tgtEl ? (parseInt(tgtEl.value) || 0) : 0;
+  if (ph === 'work') document.getElementById('timedPhase').textContent = '🔥 Série ' + (n + 1) + (tgt ? ' de ' + tgt : '') + ' em andamento';
+  document.getElementById('timedSub').textContent = ph === 'work' ? 'Toque em Descanso ao terminar a série'
+    : (tgt && n >= tgt ? '✓ ' + n + ' de ' + tgt + ' séries feitas — meta concluída'
+      : n ? 'Séries feitas: ' + n + (tgt ? ' de ' + tgt : '')
+      : 'Meta: ' + (tgt || '—') + ' séries · confira reps/carga e toque em iniciar')
+      + (ph === 'idle' && lastRest ? ' · Último descanso: ' + _fmtDur(lastRest.restDur) : '');
 }
 function _timedRegister(now) {
   const dur = Math.max(1, Math.round((now - state.tStart) / 1000));
   const before = state.currentSeries.length;
-  logSerie();                                    // registers exactly the number in "Séries" (same as standard mode)
+  // One stopwatch cycle = ONE real series. The "Séries" field is the target (shown as "Série X de N").
+  const ids = [...document.querySelectorAll('[id$="series"],[id$="_series"]')].filter(e => e.tagName === 'INPUT' || e.tagName === 'SELECT');
+  const saved = ids.map(e => e.value);
+  ids.forEach(e => e.value = 1);
+  try { logSerie(); } finally { ids.forEach((e, i) => e.value = saved[i]); }
   if (state.currentSeries.length === before) return false;
   const tid = 't' + now;
   for (let i = before; i < state.currentSeries.length; i++) {
@@ -3587,7 +3604,16 @@ function _timeTotals(entries) {
   }));
   return { work, rest, has };
 }
-setInterval(() => { try { _initTimeStyle(); refreshTimedPanel(); } catch (e) {} }, 250);
+// The queue bar only shows the cancel button for queued exercises — keep one available for ANY open exercise
+function syncCancelButton() {
+  const b = document.getElementById('btnSkipExercise');
+  if (!b) return;
+  if (state.selectedEx) {
+    if (!b.classList.contains('show')) { b.textContent = '↩ Cancelar exercício'; b.classList.add('show'); }
+    b.style.display = 'block';
+  } else { b.style.display = 'none'; b.classList.remove('show'); }
+}
+setInterval(() => { try { _initTimeStyle(); refreshTimedPanel(); } catch (e) {} try { syncCancelButton(); } catch (e) {} }, 250);
 
 function syncStopButtons() {
   const on = !!state.activeTraining;
@@ -6411,6 +6437,7 @@ function prefillLastLoad(ex) {
 
   const uid = resolveActiveUid();
   const isAerobic = isAerobicExercise(ex, state.group);
+  const _liEl = document.getElementById('lastTrainInfo'); if (_liEl) _liEl.style.display = 'none';
 
   // ── AEROBIC ──
   if (isAerobic) {
@@ -6479,6 +6506,22 @@ function prefillLastLoad(ex) {
     }
   }
 
+  // v41: Séries / Reps / Kg come from the athlete's LAST workout of this exercise (history = source of truth)
+  if (last) {
+    const _s = (last.series || []).filter(x => !x.player || x.player === last.p1name);
+    if (_s.length) {
+      maxLoad = Math.max(..._s.map(x => x.load || 0));
+      lastReps = _s[0].reps || lastReps;
+      lastSets = _s.length;
+      const _d = new Date(last.date);
+      if (_liEl) {
+        _liEl.textContent = '📋 Último treino (' + String(_d.getDate()).padStart(2, '0') + '/' + String(_d.getMonth() + 1).padStart(2, '0') + '): ' +
+          lastSets + ' × ' + lastReps + (maxLoad > 0 ? ' · ' + maxLoad + 'kg' : ' · sem carga');
+        _liEl.style.display = 'block';
+      }
+    }
+  }
+
   // Apply to Solo / P1 fields
   const loadEl    = document.getElementById('load');
   const repsEl    = document.getElementById('reps');
@@ -6495,6 +6538,7 @@ function prefillLastLoad(ex) {
   if (p1loadEl) p1loadEl.value = maxLoad;
   if (p1repsEl) p1repsEl.value = lastReps;
   if (p1restEl) p1restEl.value = lastRest;
+  const _p1s = document.getElementById('p1series'); if (_p1s) _p1s.value = lastSets;
 
   // P2 — from cache (p2-specific uid) or history
   const p2loadEl  = document.getElementById('p2load');
@@ -7144,6 +7188,7 @@ function skipToNextExercise() {
 
   // Discard current unsaved series
   state.currentSeries = [];
+  state.tPhase = 'idle'; state.tStart = 0;   // v41: also stops a running timed series/rest
   stopTimer();
   const timerBox = document.getElementById('timerBox');
   if (timerBox) timerBox.classList.remove('show');
@@ -7159,12 +7204,14 @@ function skipToNextExercise() {
     prefillLastLoad(nextEx);
     renderQueueBar();
     showToast('⏭ ' + nextEx);
+    try { saveActiveSession(); } catch(e) {}
   } else {
     // Last or not found — go back to treino
     state.sheetSelected = [];
     state.selectedEx = null;
     goPage('treino');
     showToast('Exercício cancelado');
+    try { saveActiveSession(); } catch(e) {}
   }
 }
 
