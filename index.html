@@ -338,6 +338,8 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .timed-phase{font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
 .timed-clock{font-size:56px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1;margin:6px 0;color:var(--text);}
 .timed-sub{font-size:12px;color:var(--muted);margin-bottom:12px;}
+@keyframes timedFlash{0%,100%{box-shadow:0 0 0 0 rgba(255,184,0,0);background:rgba(59,130,246,.12);}50%{box-shadow:0 0 0 6px rgba(255,184,0,.9);background:rgba(255,184,0,.38);}}
+.timed-panel.timed-alert{animation:timedFlash .5s ease-in-out infinite;border-color:#FFB800;}
 /* ── Suggested mode combo pills ── */
 .sugg-combo-pill {
   display: flex; align-items: center; gap: 6px; padding: 7px 12px;
@@ -3506,16 +3508,22 @@ function refreshTimedPanel() {
   const panel = document.getElementById('timedPanel');
   if (!panel) return;
   const aer = state.selectedEx && isAerobicExercise(state.selectedEx, state.group);
-  const on = state.timeStyle === 'timed' && !!state.selectedEx && !aer;
+  const on = state.timeStyle === 'timed' && !!state.selectedEx;   // v42: aerobic exercises get the stopwatch too
   panel.style.display = on ? 'block' : 'none';
   const row = document.getElementById('stdLogRow'); if (row) row.style.display = on ? 'none' : '';
   // standard mode registers N series per tap — say so on the button so it is never a surprise
-  const _sb = row && row.querySelector('button'), _sf = document.getElementById('series');
+  const _sb = row && row.querySelector('button'), _sf = document.getElementById(aer ? 'aerobSeries' : 'series');
   if (_sb && _sf && document.activeElement !== _sf) { const N = parseInt(_sf.value) || 1; const t = N > 1 ? '+ Registrar ' + N + ' séries' : '+ Registrar Série'; if (_sb.textContent !== t) _sb.textContent = t; }
   if (!on) return;
   const ph = state.tPhase || 'idle';
   const el = ph === 'idle' ? 0 : (Date.now() - state.tStart) / 1000;
-  panel.className = 'timed-panel' + (ph === 'idle' ? '' : ' ' + ph);
+  const restT = _restTarget(aer);
+  if (ph === 'rest' && restT > 0 && el >= restT && window._tAlertFor !== state.tStart) {
+    window._tAlertFor = state.tStart;                     // once per rest
+    if (el - restT < 10) timedRestAlert(restT);           // never alert for a stale rest (e.g. app reopened)
+  }
+  const alerting = (window._tAlertUntil || 0) > Date.now() && ph === 'rest';
+  panel.className = 'timed-panel' + (ph === 'idle' ? '' : ' ' + ph) + (alerting ? ' timed-alert' : '');
   document.getElementById('timedPhase').textContent = ph === 'work' ? '🔥 Série em andamento' : ph === 'rest' ? '😮‍💨 Descansando' : 'Pronto para a série';
   document.getElementById('timedClock').textContent = _fmtDur(el);
   document.getElementById('timedMainBtn').textContent = ph === 'work' ? '😮‍💨 Descanso' : ph === 'rest' ? '▶ Iniciar próxima série' : '▶ Iniciar série';
@@ -3524,23 +3532,67 @@ function refreshTimedPanel() {
   const cnt = {}; state.currentSeries.forEach(x => { const k = x.player || '_'; cnt[k] = (cnt[k] || 0) + 1; });
   const n = Math.max(0, ...Object.values(cnt));
   const lastRest = [...state.currentSeries].reverse().find(x => x.restDur > 0);
-  const tgtEl = document.getElementById('series') || document.getElementById('p1series');
+  const tgtEl = aer ? document.getElementById('aerobSeries') : (document.getElementById('series') || document.getElementById('p1series'));
   const tgt = tgtEl ? (parseInt(tgtEl.value) || 0) : 0;
   if (ph === 'work') document.getElementById('timedPhase').textContent = '🔥 Série ' + (n + 1) + (tgt ? ' de ' + tgt : '') + ' em andamento';
   document.getElementById('timedSub').textContent = ph === 'work' ? 'Toque em Descanso ao terminar a série'
     : (tgt && n >= tgt ? '✓ ' + n + ' de ' + tgt + ' séries feitas — meta concluída'
       : n ? 'Séries feitas: ' + n + (tgt ? ' de ' + tgt : '')
       : 'Meta: ' + (tgt || '—') + ' séries · confira reps/carga e toque em iniciar')
-      + (ph === 'idle' && lastRest ? ' · Último descanso: ' + _fmtDur(lastRest.restDur) : '');
+      + (ph === 'idle' && lastRest ? ' · Último descanso: ' + _fmtDur(lastRest.restDur) : '')
+      + (ph === 'rest' && restT > 0 ? ' · Descanso alvo: ' + _fmtDur(restT) : '')
+      + (ph === 'work' && aer ? ' · Tempo planejado: ' + (parseFloat((document.getElementById('aerobTempo') || {}).value) || 0) + 'min' : '');
+}
+// ── Rest alert: when the chosen rest is reached, flash + vibrate for 5 s. The stopwatch keeps counting. ──
+let _actx = null;
+function _unlockAudio() {
+  try {
+    if (!_actx) { const C = window.AudioContext || window.webkitAudioContext; if (C) _actx = new C(); }
+    if (_actx && _actx.state === 'suspended') _actx.resume();
+  } catch (e) {}
+}
+function _beep() {
+  try {
+    if (!_actx) return;
+    const o = _actx.createOscillator(), g = _actx.createGain();
+    o.frequency.value = 880; g.gain.value = 0.2; o.connect(g); g.connect(_actx.destination);
+    o.start(); o.stop(_actx.currentTime + 0.25);
+  } catch (e) {}
+}
+function _restTarget(aer) {
+  const v = id => { const e = document.getElementById(id); return e ? (parseInt(e.value) || 0) : 0; };
+  if (aer) return v('aerobRest');
+  if (state.mode === 'partner') return v('p1rest');
+  const gs = [...document.querySelectorAll('[id^="gs"][id$="_rest"]')].map(e => parseInt(e.value) || 0);
+  if ((state.mode === 'group' || state.mode === 'free') && gs.length) return Math.max(...gs);
+  return v('rest');
+}
+function timedRestAlert(target) {
+  window._tAlertUntil = Date.now() + 5000;                       // flashing handled by refreshTimedPanel
+  try {
+    if (settings.vibration) {
+      if (navigator.vibrate) {
+        const pat = []; for (let i = 0; i < 7; i++) pat.push(500, 200);   // ≈ 5 s
+        navigator.vibrate(pat);
+      } else {                                                    // iOS/Safari has no Vibration API → short beeps instead
+        for (let i = 0; i < 5; i++) setTimeout(_beep, i * 1000);
+      }
+    }
+  } catch (e) {}
+  showToast('⏰ Descanso de ' + _fmtDur(target) + ' atingido — o tempo continua contando', 5000);
 }
 function _timedRegister(now) {
   const dur = Math.max(1, Math.round((now - state.tStart) / 1000));
   const before = state.currentSeries.length;
   // One stopwatch cycle = ONE real series. The "Séries" field is the target (shown as "Série X de N").
-  const ids = [...document.querySelectorAll('[id$="series"],[id$="_series"]')].filter(e => e.tagName === 'INPUT' || e.tagName === 'SELECT');
+  const ids = [...document.querySelectorAll('[id$="series"],[id$="_series"],#aerobSeries')].filter(e => e.tagName === 'INPUT' || e.tagName === 'SELECT');
   const saved = ids.map(e => e.value);
   ids.forEach(e => e.value = 1);
-  try { logSerie(); } finally { ids.forEach((e, i) => e.value = saved[i]); }
+  // aerobic: the series is saved with the time actually measured (minutes, 1 decimal)
+  const tEl = isAerobicExercise(state.selectedEx, state.group) ? document.getElementById('aerobTempo') : null;
+  const tSaved = tEl ? tEl.value : null;
+  if (tEl) tEl.value = Math.max(0.1, Math.round(dur / 6) / 10);
+  try { logSerie(); } finally { ids.forEach((e, i) => e.value = saved[i]); if (tEl) tEl.value = tSaved; }
   if (state.currentSeries.length === before) return false;
   const tid = 't' + now;
   for (let i = before; i < state.currentSeries.length; i++) {
@@ -3557,6 +3609,7 @@ function _timedCloseRest(now) {
 }
 function timedMain() {
   _initTimeStyle();
+  _unlockAudio();
   const now = Date.now(), ph = state.tPhase || 'idle';
   if (ph === 'work') {
     if (!_timedRegister(now)) return;
