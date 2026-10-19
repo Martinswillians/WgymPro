@@ -1,0 +1,78 @@
+rules_version = '2';
+// ─────────────────────────────────────────────────────────────────────────────
+// Will Gym PRO — regras do Firestore (v45: vínculo personal ↔ aluno)
+// Publique em: Firebase Console → Firestore Database → Regras.
+// ATENÇÃO: se você já tem regras para  users/{uid}/...  mantenha o bloco "users" abaixo
+// (ou mescle). Sem estas regras o app continua funcionando normalmente para treinar,
+// mas as solicitações/treinos do personal retornam "permission-denied".
+// ─────────────────────────────────────────────────────────────────────────────
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function linkDoc(personal, student) {
+      return get(/databases/$(database)/documents/links/$(personal + '_' + student));
+    }
+    function linkAccepted(personal, student) {
+      return exists(/databases/$(database)/documents/links/$(personal + '_' + student))
+          && linkDoc(personal, student).data.status == 'accepted';
+    }
+
+    // Dados do próprio usuário (sync do app)
+    match /users/{uid}/{document=**} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+    // O personal só pode LER o histórico de treinos do aluno, e somente com vínculo aceito
+    match /users/{uid}/data/{key} {
+      allow read: if signedIn() && key == 'wgym_history' && linkAccepted(request.auth.uid, uid);
+    }
+
+    // Diretório para encontrar alguém pelo e-mail exato (id = e-mail em minúsculas, codificado)
+    match /directory/{emailKey} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // Vínculos: id = personalUid_studentUid
+    match /links/{linkId} {
+      allow read: if signedIn() &&
+        (resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
+      allow create: if signedIn()
+        && linkId == request.resource.data.personalUid + '_' + request.resource.data.studentUid
+        && (request.resource.data.personalUid == request.auth.uid || request.resource.data.studentUid == request.auth.uid)
+        && request.resource.data.status == 'pending'
+        && request.resource.data.requestedBy == (request.resource.data.personalUid == request.auth.uid ? 'personal' : 'student');
+      // só quem RECEBEU a solicitação pode aceitar; quem pediu não pode se auto-aceitar
+      allow update: if signedIn()
+        && (resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid)
+        && request.resource.data.personalUid == resource.data.personalUid
+        && request.resource.data.studentUid == resource.data.studentUid
+        && (request.resource.data.status != 'accepted'
+            || resource.data.requestedBy != (resource.data.personalUid == request.auth.uid ? 'personal' : 'student'));
+      allow delete: if signedIn() &&
+        (resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
+
+      // Recados entre os dois
+      match /messages/{mid} {
+        allow read: if signedIn() &&
+          (get(/databases/$(database)/documents/links/$(linkId)).data.personalUid == request.auth.uid
+           || get(/databases/$(database)/documents/links/$(linkId)).data.studentUid == request.auth.uid);
+        allow create: if signedIn() && request.resource.data.from == request.auth.uid &&
+          (get(/databases/$(database)/documents/links/$(linkId)).data.personalUid == request.auth.uid
+           || get(/databases/$(database)/documents/links/$(linkId)).data.studentUid == request.auth.uid);
+      }
+    }
+
+    // Treinos montados pelo personal para o aluno
+    match /plans/{planId} {
+      allow read: if signedIn() &&
+        (resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
+      allow create, update: if signedIn()
+        && request.resource.data.personalUid == request.auth.uid
+        && linkAccepted(request.auth.uid, request.resource.data.studentUid);
+      allow delete: if signedIn() &&
+        (resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
+    }
+  }
+}

@@ -2119,7 +2119,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       } = await import("https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js");
       const {
         getFirestore, doc, setDoc, getDoc, collection, getDocs,
-        serverTimestamp, enableIndexedDbPersistence
+        serverTimestamp, enableIndexedDbPersistence, query, where, deleteDoc
       } = await import("https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js");
 
       // Your web app's Firebase configuration (public keys — safe to expose client-side)
@@ -2156,6 +2156,10 @@ select.form-input option { background: var(--card2); color: var(--text); }
         getDoc: (ref) => getDoc(ref),
         collectionRef: (...path) => collection(fbDb, ...path),
         getDocs: (ref) => getDocs(ref),
+        // v45 (personal ↔ aluno)
+        queryDocs: async (path, field, value) => { const snap = await getDocs(query(collection(fbDb, ...path), where(field, '==', value))); return snap.docs.map(d => ({ id: d.id, data: d.data() })); },
+        listDocs: async (...path) => { const snap = await getDocs(collection(fbDb, ...path)); return snap.docs.map(d => ({ id: d.id, data: d.data() })); },
+        deleteDoc: (ref) => deleteDoc(ref),
         serverTimestamp: () => serverTimestamp(),
         // Change-password support: Firebase requires a recent login before
         // letting you change the password. If the session is "old", it throws
@@ -2294,6 +2298,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
     <button class="nav-tab" onclick="goPage('historico',this)">Histórico</button>
     <button class="nav-tab" onclick="goPage('planos',this)">📊 Planos</button>
     <button class="nav-tab" onclick="goPage('configuracoes',this)">⚙️ Config</button>
+    <button class="nav-tab" id="navPersonal" style="display:none;" onclick="goPage('personal',this)">🏅 Alunos</button>
   </div>
 </div>
 
@@ -2323,6 +2328,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
 
   <div class="card" style="padding:10px 14px;">
     <div class="card-title" style="margin-bottom:6px;">Visualizando dados de</div>
+    <input id="dashUserSearch" class="form-input" placeholder="🔍 Buscar aluno por nome..." oninput="state.dashSearch=this.value;renderDashUserPills()" style="display:none;margin-bottom:10px;">
     <div class="user-pills" id="dashUserPills"></div>
   </div>
 
@@ -2473,7 +2479,8 @@ select.form-input option { background: var(--card2); color: var(--text); }
 
   <div class="card" id="quickTemplatesCard" style="margin-bottom:10px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-      <div class="card-title" style="margin-bottom:0;">⚡ Templates Rápidos</div>
+      <div id="trainerPlansCard"></div>
+  <div class="card-title" style="margin-bottom:0;">⚡ Templates Rápidos</div>
       <button onclick="openTemplateModal(null)" style="background:var(--primary);border:none;color:white;border-radius:8px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:var(--font-body);">+ Novo</button>
     </div>
     <div id="templateGrid" class="template-grid"></div>
@@ -2911,6 +2918,8 @@ select.form-input option { background: var(--card2); color: var(--text); }
 </div>
 
 <!-- PAGE: CONFIGURACOES -->
+<div id="page-personal" class="page"><div id="personalRoot"></div></div>
+
 <div id="page-configuracoes" class="page">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;"><span style="font-family:var(--font-display);font-size:22px;font-weight:800;text-transform:uppercase;letter-spacing:1px;">⚙️ Configurações</span></div>
 
@@ -2931,6 +2940,18 @@ select.form-input option { background: var(--card2); color: var(--text); }
     <div class="settings-item" onclick="toggleTheme()">
       <div class="si-left"><div class="si-icon" id="themeIcon">🌙</div><div><div class="si-label" id="themeLabel">Tema Dark</div><div class="si-sub">Toque para alternar</div></div></div>
       <div class="si-right"><div class="toggle-switch" id="toggleTheme"></div></div>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <div class="settings-section-title">Personal Trainer</div>
+    <div class="settings-item" onclick="togglePersonalMode()">
+      <div class="si-left"><div class="si-icon">🏅</div><div><div class="si-label">Modo Personal Trainer</div><div class="si-sub">Painel de alunos, avaliações e treinos personalizados</div></div></div>
+      <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
+    </div>
+    <div class="settings-item" onclick="openLinksModal()">
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail</div></div></div>
+      <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
     </div>
   </div>
 
@@ -3785,6 +3806,480 @@ function openAppShareModal() {
   catch (e) { console.error('[WGym] QR failed', e); showToast('⚠️ Não foi possível gerar o QR code'); }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// v45 — PERSONAL TRAINER
+//  • Painel de alunos (monitoramento + alertas) e avaliação física
+//  • Vínculo personal ↔ aluno por e-mail (solicitação → aceite)
+//  • Treino personalizado montado pelo personal (aparece para o aluno)
+//  • Recados (chat simples) entre os dois
+// Dados compartilhados entre contas ficam no Firestore (veja firestore.rules).
+// ═══════════════════════════════════════════════════════════════════
+const _pt$ = id => document.getElementById(id);
+const _ptEsc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const _ptNorm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const _ptEmailKey = e => encodeURIComponent(String(e || '').trim().toLowerCase());
+const _ptCard = 'background:var(--card,#1a1a22);border:1px solid var(--border);border-radius:14px;';
+const _ptBtn = 'padding:9px 12px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;font-family:var(--font-body);border:1.5px solid var(--border);background:var(--bg2);color:var(--text);';
+const _ptBtnP = 'padding:9px 12px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;font-family:var(--font-body);border:none;background:var(--primary);color:#fff;';
+function _isPersonal() { try { return localStorage.getItem('wgym_personal_mode') === '1'; } catch (e) { return false; } }
+
+// ── private trainer data (assessments, notes, plans for local athletes) — synced to the personal's own account ──
+let _td = null;
+function trainerData() {
+  if (!_td) { try { _td = JSON.parse(localStorage.getItem('wgym_trainer_data') || 'null'); } catch (e) {} }
+  if (!_td || typeof _td !== 'object') _td = {};
+  _td.assess = _td.assess || {}; _td.notes = _td.notes || {}; _td.localPlans = _td.localPlans || {};
+  return _td;
+}
+function saveTrainerData() {
+  try { localStorage.setItem('wgym_trainer_data', JSON.stringify(_td)); } catch (e) { showToast('⚠️ Sem espaço para salvar'); }
+  try { queueCloudSync('wgym_trainer_data'); } catch (e) {}
+}
+function applyPersonalMode() {
+  const on = _isPersonal();
+  const t = _pt$('navPersonal'); if (t) t.style.display = on ? '' : 'none';
+  const st = _pt$('personalModeState'); if (st) { st.textContent = on ? 'Ativado ✓' : 'Desativado'; st.style.color = on ? 'var(--success,#2ECC71)' : 'var(--muted)'; }
+}
+function togglePersonalMode() {
+  const on = !_isPersonal();
+  try { localStorage.setItem('wgym_personal_mode', on ? '1' : '0'); queueCloudSync('wgym_personal_mode'); } catch (e) {}
+  window._dirDone = false; window._dirTry = 0;
+  applyPersonalMode();
+  showToast(on ? '🏅 Modo Personal ativado — aba "Alunos" disponível' : 'Modo Personal desativado');
+  if (on) goPage('personal');
+}
+
+// ── network layer ──
+let _links = [], _linksLoaded = false, _plansAsStudent = [], _plansAsPersonal = [], _linkedHist = {}, _fbErr = null;
+function _fbOk() { return !!(window.FB && _fbReady && _fbUser); }
+function _me() { return { uid: _fbUser.uid, name: (currentAccount && currentAccount.name) || _fbUser.displayName || '', email: _fbUser.email || (currentAccount && currentAccount.email) || '' }; }
+function _explainErr(e) {
+  _fbErr = e;
+  if (e && (e.code === 'permission-denied' || /permission/i.test(e.message || '')))
+    return '🔒 O Firebase ainda não tem as regras do vínculo personal ↔ aluno publicadas (arquivo firestore.rules).';
+  return '⚠️ Não foi possível falar com o servidor. Confira a internet e tente de novo.';
+}
+function _needLogin() { showToast('🔒 Entre com a sua conta (não como visitante) e conecte-se à internet'); }
+async function ensureDirectory() {
+  if (!_fbOk()) return false;
+  try {
+    const me = _me(); if (!me.email) return false;
+    await FB.setDoc(FB.docRef('directory', _ptEmailKey(me.email)), { uid: me.uid, name: me.name, email: me.email.toLowerCase(), avatar: (currentAccount && currentAccount.avatar) || '', personal: _isPersonal(), updatedAt: FB.serverTimestamp() });
+    window._dirDone = true; return true;
+  } catch (e) { console.warn('[WGym] directory', e); _fbErr = e; return false; }
+}
+function _myRole(l) { return l.personalUid === _fbUser.uid ? 'personal' : 'student'; }
+function _pendingIn() { return _links.filter(l => l.status === 'pending' && l.requestedBy !== _myRole(l)); }
+function updatePendingBadge() {
+  const n = _fbOk() ? _pendingIn().length : 0;
+  ['linksBadge', 'linksBadge2'].forEach(id => { const e = _pt$(id); if (e) { e.textContent = n ? ' ' + n : ''; e.style.cssText = n ? 'background:var(--primary);color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:800;margin-left:4px;' : ''; } });
+  if (n && !window._pendToast) { window._pendToast = true; showToast('🤝 Você tem ' + n + (n > 1 ? ' solicitações' : ' solicitação') + ' de vínculo — veja em Config → Conexões', 5000); }
+}
+async function refreshLinks(quiet) {
+  if (!_fbOk()) { if (!quiet) _needLogin(); return false; }
+  try {
+    const me = _fbUser.uid;
+    const [a, b] = await Promise.all([FB.queryDocs(['links'], 'personalUid', me), FB.queryDocs(['links'], 'studentUid', me)]);
+    const m = new Map(); [...a, ...b].forEach(x => m.set(x.id, { id: x.id, ...x.data }));
+    _links = [...m.values()]; _linksLoaded = true; updatePendingBadge(); return true;
+  } catch (e) { const msg = _explainErr(e); if (!quiet) showToast(msg, 6000); return false; }
+}
+async function refreshPlans() {
+  if (!_fbOk()) return false;
+  try {
+    const me = _fbUser.uid;
+    const [a, b] = await Promise.all([FB.queryDocs(['plans'], 'studentUid', me), FB.queryDocs(['plans'], 'personalUid', me)]);
+    _plansAsStudent = a.map(x => ({ id: x.id, ...x.data })); _plansAsPersonal = b.map(x => ({ id: x.id, ...x.data }));
+    return true;
+  } catch (e) { _explainErr(e); return false; }
+}
+async function fetchLinkedHistory(uid) {
+  try {
+    const snap = await FB.getDoc(FB.docRef('users', uid, 'data', 'wgym_history'));
+    let v = snap.exists() ? snap.data().value : [];
+    if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = []; } }
+    _linkedHist[uid] = Array.isArray(v) ? v : [];
+  } catch (e) { _explainErr(e); _linkedHist[uid] = _linkedHist[uid] || []; _linkedHist[uid]._err = true; }
+  return _linkedHist[uid];
+}
+async function sendLinkRequest(raw) {
+  if (!_fbOk()) { _needLogin(); return false; }
+  const email = String(raw || '').trim().toLowerCase();
+  if (!/^\S+@\S+\.\S+$/.test(email)) { showToast('Digite um e-mail válido'); return false; }
+  const me = _me();
+  if (email === me.email.toLowerCase()) { showToast('Esse é o seu próprio e-mail'); return false; }
+  try {
+    const snap = await FB.getDoc(FB.docRef('directory', _ptEmailKey(email)));
+    if (!snap.exists()) { showToast('Nenhuma conta com esse e-mail usa o Will Gym (ainda)', 5000); return false; }
+    const t = snap.data(), amP = _isPersonal();
+    const P = amP ? me : { uid: t.uid, name: t.name, email: t.email }, S = amP ? { uid: t.uid, name: t.name, email: t.email } : me;
+    const id = P.uid + '_' + S.uid;
+    const ex = await FB.getDoc(FB.docRef('links', id));
+    if (ex.exists()) {
+      const d = ex.data();
+      if (d.status === 'accepted') { showToast('Vocês já estão conectados'); return false; }
+      if (d.status === 'pending') { showToast(d.requestedBy === (amP ? 'personal' : 'student') ? 'Solicitação já enviada — aguarde o aceite' : 'Essa pessoa já te enviou uma solicitação — aceite na lista', 5000); return false; }
+    }
+    await FB.setDoc(FB.docRef('links', id), { personalUid: P.uid, personalName: P.name, personalEmail: P.email, studentUid: S.uid, studentName: S.name, studentEmail: S.email, status: 'pending', requestedBy: amP ? 'personal' : 'student', createdAt: FB.serverTimestamp(), updatedAt: FB.serverTimestamp() });
+    await refreshLinks(true); showToast('📨 Solicitação enviada para ' + (t.name || email)); return true;
+  } catch (e) { showToast(_explainErr(e), 6000); return false; }
+}
+async function setLinkStatus(id, status) {
+  try {
+    if (status === 'removed') {
+      const l = _links.find(x => x.id === id);
+      if (l && l.studentUid === _fbUser.uid) {                         // student leaving: drop the personal's plans for me
+        const mine = _plansAsStudent.filter(p => p.personalUid === l.personalUid);
+        for (const p of mine) { try { await FB.deleteDoc(FB.docRef('plans', p.id)); } catch (e) {} }
+      }
+      await FB.deleteDoc(FB.docRef('links', id));
+    } else await FB.setDoc(FB.docRef('links', id), { status, updatedAt: FB.serverTimestamp() }, { merge: true });
+    await refreshLinks(true); await refreshPlans();
+    renderLinksModal(); try { renderPersonalList(); renderTrainerPlans(true); } catch (e) {}
+    if (status === 'accepted') showToast('✅ Vínculo aceito!');
+  } catch (e) { showToast(_explainErr(e), 6000); }
+}
+
+// ── generic overlay ──
+function _ptOverlay(id, html, maxW, z) {
+  const old = _pt$(id); if (old) old.remove();
+  const o = document.createElement('div'); o.id = id;
+  o.style.cssText = 'position:fixed;inset:0;z-index:' + (z || 10000) + ';background:rgba(0,0,0,.78);display:flex;align-items:center;justify-content:center;padding:12px;';
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  o.innerHTML = `<div style="width:100%;max-width:${maxW || 560}px;max-height:92vh;overflow-y:auto;${_ptCard}border-radius:20px;padding:18px;">${html}</div>`;
+  document.body.appendChild(o); return o;
+}
+const _ptClose = id => { const e = _pt$(id); if (e) e.remove(); };
+
+// ── Conexões modal ──
+function openLinksModal() {
+  if (!_fbOk()) { _needLogin(); return; }
+  _ptOverlay('ptLinks', '<div id="ptLinksBody"></div>', 480);
+  renderLinksModal(); refreshLinks(false).then(() => renderLinksModal());
+}
+function renderLinksModal() {
+  const body = _pt$('ptLinksBody'); if (!body || !_fbOk()) return;
+  const amP = _isPersonal(), me = _fbUser.uid;
+  const other = l => _myRole(l) === 'personal' ? { name: l.studentName, email: l.studentEmail, tag: 'Aluno' } : { name: l.personalName, email: l.personalEmail, tag: 'Personal' };
+  const row = (l, actions) => { const o = other(l); return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0;border-top:1px solid var(--border);"><div style="min-width:0;"><div style="font-weight:700;">${_ptEsc(o.name || o.email)} <span style="font-size:11px;color:var(--muted);font-weight:600;">· ${o.tag}</span></div><div style="font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;">${_ptEsc(o.email)}</div></div><div style="display:flex;gap:6px;flex:none;">${actions}</div></div>`; };
+  const inc = _links.filter(l => l.status === 'pending' && l.requestedBy !== _myRole(l));
+  const out = _links.filter(l => l.status === 'pending' && l.requestedBy === _myRole(l));
+  const ok = _links.filter(l => l.status === 'accepted');
+  const sec = (t, h) => h ? `<div style="margin-top:14px;"><div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:700;">${t}</div>${h}</div>` : '';
+  body.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-family:var(--font-display);font-size:20px;font-weight:800;text-transform:uppercase;">🤝 Conexões</div><button style="${_ptBtn}" onclick="_ptClose('ptLinks')">✕</button></div>
+    <div style="font-size:13px;color:var(--muted);margin:6px 0 12px;">${amP ? 'Você está no <b>modo Personal</b>: convide seus alunos pelo e-mail da conta deles.' : 'Peça o vínculo com o seu <b>personal</b> pelo e-mail da conta dele. Ele poderá montar treinos para você e acompanhar sua evolução.'}</div>
+    <div style="display:flex;gap:8px;"><input id="ptLinkEmail" class="form-input" type="email" placeholder="${amP ? 'e-mail do aluno' : 'e-mail do personal'}" style="flex:1;" onkeydown="if(event.key==='Enter')ptSendFromInput()"><button style="${_ptBtnP}" onclick="ptSendFromInput()">Enviar</button></div>
+    ${sec('Solicitações recebidas', inc.map(l => row(l, `<button style="${_ptBtnP}" onclick="setLinkStatus('${l.id}','accepted')">Aceitar</button><button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Recusar</button>`)).join(''))}
+    ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
+    ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
+    ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.</div>`;
+}
+async function ptSendFromInput() {
+  const inp = _pt$('ptLinkEmail'); if (!inp) return;
+  if (await sendLinkRequest(inp.value)) { inp.value = ''; renderLinksModal(); }
+}
+
+// ── Recados (chat) ──
+let _chat = null;
+async function openChat(linkId) {
+  const l = _links.find(x => x.id === linkId); if (!l) return;
+  const o = _myRole(l) === 'personal' ? l.studentName : l.personalName;
+  _ptOverlay('ptChat', `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><div style="font-family:var(--font-display);font-size:18px;font-weight:800;">💬 ${_ptEsc(o || 'Recados')}</div><button style="${_ptBtn}" onclick="_ptClose('ptChat')">✕</button></div><div id="ptChatMsgs" style="height:46vh;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding:4px;"></div><div style="display:flex;gap:8px;margin-top:10px;"><input id="ptChatInput" class="form-input" placeholder="Escreva um recado..." style="flex:1;" onkeydown="if(event.key==='Enter')ptChatSend()"><button style="${_ptBtnP}" onclick="ptChatSend()">Enviar</button></div>`, 480, 10003);
+  _chat = { linkId }; await ptChatLoad();
+  clearInterval(window._chatT); window._chatT = setInterval(() => { if (!_pt$('ptChat')) { clearInterval(window._chatT); return; } ptChatLoad(); }, 7000);
+}
+async function ptChatLoad() {
+  if (!_chat || !_pt$('ptChatMsgs')) return;
+  try {
+    const msgs = (await FB.listDocs('links', _chat.linkId, 'messages')).map(x => x.data).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    const box = _pt$('ptChatMsgs'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    box.innerHTML = msgs.length ? msgs.map(m => { const mine = m.from === _fbUser.uid; return `<div style="align-self:${mine ? 'flex-end' : 'flex-start'};max-width:80%;background:${mine ? 'var(--primary)' : 'var(--bg2)'};color:${mine ? '#fff' : 'var(--text)'};padding:8px 12px;border-radius:14px;font-size:14px;white-space:pre-wrap;">${_ptEsc(m.text)}<div style="font-size:10px;opacity:.7;margin-top:2px;">${mine ? 'você' : _ptEsc(m.name || '')} · ${new Date(m.ts).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div></div>`; }).join('') : '<div style="color:var(--muted);text-align:center;margin:auto;font-size:13px;">Nenhum recado ainda.</div>';
+    if (atEnd) box.scrollTop = box.scrollHeight;
+  } catch (e) { showToast(_explainErr(e), 5000); }
+}
+async function ptChatSend() {
+  const inp = _pt$('ptChatInput'); if (!inp || !_chat) return;
+  const text = inp.value.trim(); if (!text) return; inp.value = '';
+  try { const me = _me(); await FB.setDoc(FB.docRef('links', _chat.linkId, 'messages', 'm' + Date.now()), { from: me.uid, name: me.name, text, ts: Date.now() }); await ptChatLoad(); }
+  catch (e) { showToast(_explainErr(e), 5000); inp.value = text; }
+}
+
+// ═══ Monitoring ═══
+function _studentList() {
+  const list = getActiveUsers().map(u => ({ key: 'L:' + u.id, kind: 'local', id: u.id, name: u.name, avatar: u.avatar }));
+  if (_fbOk()) _links.filter(l => l.status === 'accepted' && l.personalUid === _fbUser.uid)
+    .forEach(l => list.push({ key: 'R:' + l.studentUid, kind: 'linked', uid: l.studentUid, linkId: l.id, name: l.studentName || l.studentEmail, avatar: '🔗', email: l.studentEmail }));
+  return list.map(st => { st.entries = _studentEntries(st); st.loading = st.kind === 'linked' && !_linkedHist[st.uid]; st.stats = computeStudentStats(st, st.entries); return st; });
+}
+function _studentEntries(st) {
+  return st.kind === 'local' ? history.filter(h => h.userId === st.id || h.userId2 === st.id || (h.groupUserIds || []).includes(st.id)) : (_linkedHist[st.uid] || []);
+}
+const _ptN = x => +x || 0;
+const _ptE1 = (l, r) => (l > 0 && r > 0) ? l * (1 + r / 30) : 0;
+function _ptVol(h, name) { return h.isAerobic ? 0 : (h.series || []).filter(x => !x.player || !name || x.player === name).reduce((a, x) => a + _ptN(x.load) * _ptN(x.reps), 0); }
+function computeStudentStats(st, entries) {
+  const now = Date.now(), D = 864e5;
+  const ev = (entries || []).filter(h => h && h.date).map(h => ({ h, t: new Date(h.date).getTime() })).filter(x => isFinite(x.t));
+  const days = (from, to) => new Set(ev.filter(x => x.t >= now - to * D && x.t < now - from * D).map(x => localDateKey(new Date(x.t)))).size;
+  const last = ev.length ? Math.max(...ev.map(x => x.t)) : null;
+  const daysSince = last ? Math.floor((now - last) / D) : null;
+  const s7 = days(0, 7), s28 = days(0, 28), perWeek = s28 / 4, goal = (settings && settings.weekGoal) || 4;
+  const cons = Math.min(100, Math.round(perWeek / goal * 100));
+  const vol = (a, b) => ev.filter(x => x.t >= now - b * D && x.t < now - a * D).reduce((s, x) => s + _ptVol(x.h, st.kind === 'local' ? st.name : null), 0);
+  const v28 = vol(0, 28), vp = vol(28, 56), trend = vp > 0 ? Math.round((v28 - vp) / vp * 100) : null;
+  const best = {}, recent = {};
+  ev.forEach(x => { if (x.h.isAerobic) return; const m = Math.max(0, ...(x.h.series || []).map(s => _ptE1(_ptN(s.load), _ptN(s.reps)))); if (!m) return; const k = x.h.exercise; if (x.t < now - 28 * D) best[k] = Math.max(best[k] || 0, m); else recent[k] = Math.max(recent[k] || 0, m); });
+  const prs = Object.keys(recent).filter(k => best[k] && recent[k] > best[k] * 1.001);
+  const weeks = [...Array(8)].map((_, i) => days((7 - i) * 7, (8 - i) * 7));
+  // attention level
+  let att;
+  if (!ev.length) att = { score: 1.5, color: '#94a3b8', label: st.loading ? 'Carregando…' : 'Sem treinos', reasons: [st.loading ? 'Buscando dados do aluno…' : 'Nenhum treino registrado ainda'] };
+  else {
+    const reasons = []; let score = 0, color = '#22c55e', label = 'No ritmo';
+    if (daysSince >= 10) { score = 3; color = '#ef4444'; label = 'Sumido'; reasons.push('Sem treinar há ' + daysSince + ' dias'); }
+    else if (daysSince >= 5) { score = 2; color = '#f59e0b'; label = 'Atenção'; reasons.push('Sem treinar há ' + daysSince + ' dias'); }
+    if (score < 2 && cons < 50) { score = Math.max(score, 2); color = '#f59e0b'; label = 'Atenção'; reasons.push('Frequência abaixo de 50% da meta (' + perWeek.toFixed(1) + '/' + goal + ' por semana)'); }
+    if (trend !== null && trend <= -20) { if (score < 1) { score = 1; color = '#eab308'; label = 'Queda de volume'; } reasons.push('Volume caiu ' + Math.abs(trend) + '% vs. 4 semanas anteriores'); }
+    if (!reasons.length) reasons.push('Treinando conforme a meta');
+    att = { score, color, label, reasons };
+  }
+  return { last, daysSince, s7, s28, perWeek, goal, cons, v28, vp, trend, prs, weeks, att };
+}
+function _ptAgo(t) { if (!t) return 'nunca'; const d = Math.floor((Date.now() - t) / 864e5); return d <= 0 ? 'hoje' : d === 1 ? 'ontem' : 'há ' + d + ' dias'; }
+const _pf = { q: '', f: 'all' };
+function renderPersonalPage() {
+  const root = _pt$('personalRoot'); if (!root) return;
+  if (!_pt$('ptSearch')) {
+    root.innerHTML = `
+      <div style="${_ptCard}padding:16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <div><div style="font-family:var(--font-display);font-size:20px;font-weight:800;text-transform:uppercase;">🏅 Meus alunos</div><div style="font-size:12px;color:var(--muted);">Monitore, avalie e monte treinos</div></div>
+        <div style="display:flex;gap:6px;"><button style="${_ptBtn}" onclick="openLinksModal()">🤝<span id="linksBadge2"></span></button><button style="${_ptBtn}" onclick="ptRefreshAll(true)">🔄</button></div>
+      </div>
+      <div id="ptKpis" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;"></div>
+      <input id="ptSearch" class="form-input" placeholder="🔍 Buscar aluno por nome..." oninput="_pf.q=this.value;renderPersonalList()" style="margin-bottom:8px;">
+      <div id="ptChips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>
+      <div id="ptList"></div>`;
+  }
+  renderPersonalList(); updatePendingBadge();
+}
+function renderPersonalList() {
+  const list = _pt$('ptList'); if (!list) return;
+  const all = _studentList(), q = _ptNorm(_pf.q);
+  const kpi = (v, l, c) => `<div style="${_ptCard}padding:10px 6px;text-align:center;"><div style="font-size:22px;font-weight:800;color:${c || 'var(--text)'};">${v}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">${l}</div></div>`;
+  _pt$('ptKpis').innerHTML = kpi(all.length, 'Alunos') + kpi(all.filter(s => s.stats.s7 > 0).length, 'Ativos 7d', '#22c55e') + kpi(all.filter(s => s.stats.att.score >= 2).length, 'Em atenção', '#f59e0b') + kpi(_fbOk() ? _pendingIn().length : 0, 'Pedidos', 'var(--primary)');
+  const chip = (id, t) => `<button onclick="_pf.f='${id}';renderPersonalList()" style="${_ptBtn}${_pf.f === id ? 'border-color:var(--primary);background:var(--primary-light,rgba(255,61,37,.15));' : ''}padding:6px 12px;font-size:12px;">${t}</button>`;
+  _pt$('ptChips').innerHTML = chip('all', 'Todos') + chip('attn', '⚠️ Precisam de atenção') + chip('ok', '✅ No ritmo') + chip('linked', '🔗 Vinculados');
+  let rows = all.filter(s => !q || _ptNorm(s.name).includes(q));
+  if (_pf.f === 'attn') rows = rows.filter(s => s.stats.att.score >= 1); else if (_pf.f === 'ok') rows = rows.filter(s => s.stats.att.score === 0); else if (_pf.f === 'linked') rows = rows.filter(s => s.kind === 'linked');
+  rows.sort((a, b) => b.stats.att.score - a.stats.att.score || a.name.localeCompare(b.name));
+  list.innerHTML = rows.length ? rows.map(s => { const t = s.stats; return `
+    <div onclick="openStudentModal('${s.key}')" style="${_ptCard}padding:12px 14px;margin-bottom:8px;cursor:pointer;border-left:4px solid ${t.att.color};">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <div style="display:flex;align-items:center;gap:10px;min-width:0;"><span style="font-size:24px;">${s.avatar}</span><div style="min-width:0;"><div style="font-weight:800;">${_ptEsc(s.name)}${s.kind === 'linked' ? ' <span style="font-size:10px;color:var(--muted);font-weight:700;">· conta vinculada</span>' : ''}</div><div style="font-size:12px;color:var(--muted);">${s.loading ? 'carregando…' : 'Último treino: ' + _ptAgo(t.last)}</div></div></div>
+        <span style="flex:none;font-size:11px;font-weight:800;color:${t.att.color};border:1.5px solid ${t.att.color};border-radius:12px;padding:3px 9px;">${t.att.label}</span>
+      </div>
+      <div style="display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:8px;"><span>📅 ${t.s7} treino${t.s7 === 1 ? '' : 's'}/7d</span><span>📈 ${t.perWeek.toFixed(1)}/sem (meta ${t.goal})</span>${t.trend !== null ? `<span style="color:${t.trend >= 0 ? '#22c55e' : '#ef4444'};">${t.trend >= 0 ? '▲' : '▼'} ${Math.abs(t.trend)}% vol.</span>` : ''}${t.prs.length ? `<span>🏆 ${t.prs.length} PR</span>` : ''}</div>
+      <div style="height:5px;border-radius:3px;background:var(--bg2);margin-top:8px;overflow:hidden;"><div style="height:100%;width:${t.cons}%;background:${t.att.color};"></div></div>
+    </div>`; }).join('') : `<div style="text-align:center;color:var(--muted);padding:30px 0;font-size:14px;">${all.length ? 'Nenhum aluno encontrado.' : 'Você ainda não tem alunos. Crie perfis em Config → Atletas ou convide por e-mail em 🤝.'}</div>`;
+}
+async function ptRefreshAll(manual) {
+  if (_fbOk()) {
+    await refreshLinks(!manual); await refreshPlans();
+    await Promise.all(_links.filter(l => l.status === 'accepted' && l.personalUid === _fbUser.uid).map(l => fetchLinkedHistory(l.studentUid)));
+  } else if (manual) _needLogin();
+  try { renderPersonalList(); renderTrainerPlans(true); } catch (e) {}
+  if (manual) showToast('🔄 Atualizado');
+}
+
+// ═══ Student detail (monitor + evaluate) ═══
+function _ptFind(key) { return _studentList().find(s => s.key === key); }
+function openStudentModal(key) {
+  _ptOverlay('ptStudent', '<div id="ptStudentBody"></div>', 600);
+  renderStudent(key);
+  const st = _ptFind(key);
+  if (st && st.kind === 'linked' && !_linkedHist[st.uid]) fetchLinkedHistory(st.uid).then(() => renderStudent(key));
+}
+function _ptPlansFor(st) { return st.kind === 'local' ? (trainerData().localPlans[st.id] || []) : _plansAsPersonal.filter(p => p.studentUid === st.uid); }
+function renderStudent(key) {
+  const body = _pt$('ptStudentBody'); if (!body) return;
+  const st = _ptFind(key); if (!st) { body.innerHTML = 'Aluno não encontrado'; return; }
+  const t = st.stats, td = trainerData(), as = (td.assess[key] || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+  const kpi = (l, v, sub, c) => `<div style="${_ptCard}padding:10px;"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">${l}</div><div style="font-size:20px;font-weight:800;color:${c || 'var(--text)'};">${v}</div><div style="font-size:11px;color:var(--muted);">${sub || ''}</div></div>`;
+  const h3 = x => `<div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:800;margin:16px 0 8px;">${x}</div>`;
+  const maxW = Math.max(1, ...t.weeks);
+  const bars = t.weeks.map((v, i) => `<div style="flex:1;text-align:center;"><div style="height:${6 + Math.round(v / maxW * 44)}px;background:${v ? 'var(--primary)' : 'var(--bg2)'};border-radius:4px 4px 0 0;margin-top:${50 - Math.round(v / maxW * 44)}px;"></div><div style="font-size:10px;color:var(--muted);">${v}</div></div>`).join('');
+  // progression per exercise
+  const byEx = {};
+  st.entries.filter(h => h && h.date && !h.isAerobic).sort((a, b) => new Date(a.date) - new Date(b.date)).forEach(h => { const m = Math.max(0, ...(h.series || []).map(s => _ptE1(_ptN(s.load), _ptN(s.reps)))); if (m) (byEx[h.exercise] = byEx[h.exercise] || []).push(m); });
+  const prog = Object.entries(byEx).filter(([, a]) => a.length >= 2).sort((a, b) => b[1].length - a[1].length).slice(0, 5).map(([ex, a]) => { const f = a[0], l = a[a.length - 1], p = Math.round((l - f) / f * 100); return `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;"><span>${_ptEsc(ex)} <span style="color:var(--muted);font-size:11px;">· ${a.length} treinos</span></span><span style="font-weight:700;color:${p >= 0 ? '#22c55e' : '#ef4444'};">${Math.round(f)} → ${Math.round(l)}kg (${p >= 0 ? '+' : ''}${p}%)</span></div>`; }).join('');
+  const rec = {}; st.entries.slice().sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(h => { const k = localDateKey(new Date(h.date)); (rec[k] = rec[k] || { g: new Set(), n: 0 }); if (h.group) rec[k].g.add(h.group); rec[k].n++; });
+  const recent = Object.entries(rec).slice(0, 5).map(([k, v]) => `<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;"><span>${k.split('-').reverse().join('/')}</span><span style="color:var(--muted);">${[...v.g].join(' + ') || 'Treino'} · ${v.n} exerc.</span></div>`).join('');
+  const asRows = as.slice(0, 4).map((a, i) => { const p = as[i + 1], d = (x, y, u) => (x != null && y != null && x !== '' && y !== '') ? ` <span style="color:${x - y <= 0 ? '#22c55e' : '#f59e0b'};font-size:11px;">(${x - y > 0 ? '+' : ''}${(x - y).toFixed(1)}${u})</span>` : ''; return `<div style="font-size:13px;padding:6px 0;border-top:1px solid var(--border);"><b>${a.date.split('-').reverse().join('/')}</b> — ${a.peso !== '' ? 'Peso ' + a.peso + 'kg' + (p ? d(+a.peso, +p.peso, 'kg') : '') : ''}${a.gord !== '' ? ' · Gordura ' + a.gord + '%' + (p ? d(+a.gord, +p.gord, '%') : '') : ''}${a.cint !== '' ? ' · Cintura ' + a.cint + 'cm' + (p ? d(+a.cint, +p.cint, 'cm') : '') : ''}${a.obs ? `<div style="color:var(--muted);">${_ptEsc(a.obs)}</div>` : ''}<span onclick="ptDelAssess('${key}','${a.id}')" style="float:right;cursor:pointer;color:var(--muted);">✕</span></div>`; }).join('');
+  const plans = _ptPlansFor(st).map(p => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--border);"><div><div style="font-weight:700;">${_ptEsc(p.title)}</div><div style="font-size:12px;color:var(--muted);">${p.days.length} dia(s) · ${p.days.reduce((a, d) => a + d.exs.length, 0)} exercícios</div></div><div style="display:flex;gap:6px;"><button style="${_ptBtn}" onclick="openPlanBuilder('${key}','${p.id}')">Editar</button><button style="${_ptBtn}" onclick="ptDeletePlan('${key}','${p.id}')">🗑</button></div></div>`).join('');
+  body.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><div style="display:flex;align-items:center;gap:10px;"><span style="font-size:30px;">${st.avatar}</span><div><div style="font-family:var(--font-display);font-size:20px;font-weight:800;">${_ptEsc(st.name)}</div><div style="font-size:12px;color:${t.att.color};font-weight:700;">${t.att.label} · ${t.att.reasons.map(_ptEsc).join(' · ')}</div></div></div><button style="${_ptBtn}" onclick="_ptClose('ptStudent')">✕</button></div>
+    ${st.loading ? '<div style="color:var(--muted);font-size:13px;margin-top:10px;">Carregando dados do aluno…</div>' : ''}
+    ${(_linkedHist[st.uid] || {})._err ? '<div style="color:#ef4444;font-size:13px;margin-top:10px;">Não foi possível ler os treinos deste aluno (verifique as regras do Firebase).</div>' : ''}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px;">
+      ${kpi('Último treino', _ptAgo(t.last), '')}${kpi('Treinos 7d / 28d', t.s7 + ' / ' + t.s28, '')}${kpi('Frequência', t.perWeek.toFixed(1) + '/sem', 'meta ' + t.goal + ' (' + t.cons + '%)', t.cons >= 80 ? '#22c55e' : t.cons >= 50 ? '#f59e0b' : '#ef4444')}
+      ${kpi('Volume 28d', t.v28 >= 1000 ? (t.v28 / 1000).toFixed(1) + 't' : t.v28 + 'kg', t.trend === null ? '—' : (t.trend >= 0 ? '▲ +' : '▼ ') + t.trend + '% vs. anterior', t.trend === null ? '' : t.trend >= 0 ? '#22c55e' : '#ef4444')}
+      ${kpi('Recordes 28d', t.prs.length, t.prs.slice(0, 2).join(', ') || '—', '#eab308')}${kpi('Treinos do personal', st.entries.filter(h => h.planId).length, 'exercícios feitos')}
+    </div>
+    ${h3('Frequência — últimas 8 semanas (treinos/semana)')}<div style="display:flex;gap:6px;align-items:flex-end;height:70px;">${bars}</div>
+    ${prog ? h3('Progressão (1RM estimado)') + prog : ''}
+    ${recent ? h3('Treinos recentes') + recent : ''}
+    ${h3('Avaliação física')}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;"><input id="asPeso" class="form-input" type="number" step="0.1" placeholder="Peso kg"><input id="asGord" class="form-input" type="number" step="0.1" placeholder="% gordura"><input id="asCint" class="form-input" type="number" step="0.1" placeholder="Cintura cm"></div>
+    <div style="display:flex;gap:6px;margin-top:6px;"><input id="asObs" class="form-input" placeholder="Observações da avaliação" style="flex:1;"><button style="${_ptBtnP}" onclick="ptSaveAssess('${key}')">Salvar</button></div>${asRows}
+    ${h3('Anotações privadas (só você vê)')}<textarea class="form-input" rows="3" placeholder="Objetivos, lesões, observações..." onblur="ptSaveNote('${key}',this.value)" style="width:100%;">${_ptEsc(td.notes[key] || '')}</textarea>
+    ${h3('Treinos montados por você')}${plans || '<div style="font-size:13px;color:var(--muted);">Nenhum treino montado ainda.</div>'}
+    <div style="display:flex;gap:8px;margin-top:12px;"><button style="${_ptBtnP}flex:1;" onclick="openPlanBuilder('${key}')">➕ Montar treino</button>${st.kind === 'linked' ? `<button style="${_ptBtn}" onclick="openChat('${st.linkId}')">💬 Recados</button>` : ''}</div>`;
+}
+function ptSaveAssess(key) {
+  const v = id => (_pt$(id) || {}).value || '';
+  const a = { id: 'a' + Date.now(), date: localDateKey(new Date()), peso: v('asPeso'), gord: v('asGord'), cint: v('asCint'), obs: v('asObs').trim() };
+  if (a.peso === '' && a.gord === '' && a.cint === '' && !a.obs) { showToast('Preencha pelo menos um campo'); return; }
+  const td = trainerData(); (td.assess[key] = td.assess[key] || []).push(a); saveTrainerData(); renderStudent(key); showToast('✅ Avaliação salva');
+}
+function ptDelAssess(key, id) { const td = trainerData(); td.assess[key] = (td.assess[key] || []).filter(x => x.id !== id); saveTrainerData(); renderStudent(key); }
+function ptSaveNote(key, v) { const td = trainerData(); td.notes[key] = v; saveTrainerData(); }
+
+// ═══ Plan builder (personal) ═══
+let _pb = null;
+function openPlanBuilder(key, planId) {
+  const st = _ptFind(key); if (!st) return;
+  const ex = planId ? _ptPlansFor(st).find(p => p.id === planId) : null;
+  _pb = ex ? JSON.parse(JSON.stringify(ex)) : { id: 'p' + Date.now(), title: '', note: '', days: [{ name: 'Treino A', exs: [] }] };
+  _pb.key = key; renderPlanBuilder();
+}
+function _pbGroups() { return getAllGroups().map(g => typeof g === 'string' ? g : (g.name || g.label || g.id)); }
+function _pbExList(g) { return [...(EXERCISES[g] || []), ...((state.customExByGroup || {})[g] || [])]; }
+function renderPlanBuilder() {
+  const st = _ptFind(_pb.key); if (!st) return;
+  const groups = _pbGroups();
+  const day = (d, di) => `<div style="border:1px solid var(--border);border-radius:12px;padding:10px;margin-bottom:10px;">
+    <div style="display:flex;gap:6px;"><input class="form-input" value="${_ptEsc(d.name)}" oninput="_pb.days[${di}].name=this.value" style="flex:1;font-weight:700;"><button style="${_ptBtn}" onclick="_pbRmDay(${di})">🗑</button></div>
+    ${d.exs.map((e, i) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:6px 0;border-bottom:1px solid var(--border);"><span>${i + 1}. <b>${_ptEsc(e.ex)}</b> <span style="color:var(--muted);">(${_ptEsc(e.group)})</span><br><span style="color:var(--muted);">${e.sets}× ${isAerobicExercise(e.ex, e.group) ? e.reps + 'min' : e.reps}${e.load > 0 ? ' · ' + e.load + 'kg' : ''}${e.rest > 0 ? ' · desc ' + e.rest + 's' : ''}</span></span><span style="cursor:pointer;color:var(--muted);" onclick="_pbRmEx(${di},${i})">✕</span></div>`).join('')}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;"><select class="form-input" id="pbg${di}" onchange="_pb.days[${di}].lg=this.value;_pbFillEx(${di})">${groups.map(g => `<option ${g === (d.lg || groups[0]) ? 'selected' : ''}>${_ptEsc(g)}</option>`).join('')}</select><select class="form-input" id="pbe${di}"></select></div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr) auto;gap:6px;margin-top:8px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;"><span>Séries</span><span>Reps (min*)</span><span>Kg</span><span>Desc. (s)</span><span></span></div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr) auto;gap:6px;margin-top:2px;"><input class="form-input" id="pbs${di}" type="number" placeholder="Séries" value="3"><input class="form-input" id="pbr${di}" type="number" placeholder="Reps" value="12"><input class="form-input" id="pbl${di}" type="number" step="0.5" placeholder="Kg"><input class="form-input" id="pbd${di}" type="number" placeholder="Desc" value="60"><button style="${_ptBtnP}" onclick="_pbAddEx(${di})">＋</button></div>
+    <div style="font-size:10px;color:var(--muted);margin-top:4px;">* Em exercícios aeróbicos, o 2º campo é o tempo em minutos.</div></div>`;
+  _ptOverlay('ptPlan', `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><div style="font-family:var(--font-display);font-size:19px;font-weight:800;">🏅 Treino para ${_ptEsc(st.name)}</div><button style="${_ptBtn}" onclick="_ptClose('ptPlan')">✕</button></div>
+    <input class="form-input" placeholder="Nome do treino (ex.: Hipertrofia — Semana 1)" value="${_ptEsc(_pb.title)}" oninput="_pb.title=this.value" style="width:100%;margin-bottom:6px;">
+    <textarea class="form-input" rows="2" placeholder="Recado para o aluno (opcional)" oninput="_pb.note=this.value" style="width:100%;margin-bottom:10px;">${_ptEsc(_pb.note)}</textarea>
+    ${_pb.days.map(day).join('')}
+    <button style="${_ptBtn}width:100%;margin-bottom:10px;" onclick="_pb.days.push({name:'Treino '+String.fromCharCode(65+_pb.days.length),exs:[]});renderPlanBuilder()">＋ Novo dia de treino</button>
+    <button style="${_ptBtnP}width:100%;padding:13px;" onclick="_pbSave()">💾 Salvar e enviar ao aluno</button>`, 600, 10002);
+  _pb.days.forEach((_, di) => _pbFillEx(di));
+}
+function _pbFillEx(di) {
+  const g = (_pt$('pbg' + di) || {}).value, sel = _pt$('pbe' + di); if (!sel) return;
+  sel.innerHTML = _pbExList(g).map(n => `<option>${_ptEsc(n)}</option>`).join('');
+}
+function _pbAddEx(di) {
+  const g = _pt$('pbg' + di).value, ex = _pt$('pbe' + di).value; if (!ex) { showToast('Escolha um exercício'); return; }
+  const n = id => parseFloat(_pt$(id + di).value) || 0;
+  _pb.days[di].exs.push({ ex, group: g, sets: n('pbs') || 1, reps: n('pbr') || 1, load: n('pbl'), rest: n('pbd') }); _pb.days[di].lg = g; renderPlanBuilder();
+}
+function _pbRmEx(di, i) { _pb.days[di].exs.splice(i, 1); renderPlanBuilder(); }
+function _pbRmDay(di) { if (_pb.days.length > 1) { _pb.days.splice(di, 1); renderPlanBuilder(); } }
+async function _pbSave() {
+  if (!_pb.days.some(d => d.exs.length)) { showToast('Adicione pelo menos um exercício'); return; }
+  const st = _ptFind(_pb.key), me = (currentAccount && currentAccount.name) || 'Personal';
+  const plan = { id: _pb.id, title: (_pb.title || '').trim() || 'Treino do personal', note: (_pb.note || '').trim(), personalName: me, days: _pb.days.filter(d => d.exs.length).map(d => ({ name: (d.name || '').trim() || 'Treino', exs: d.exs })), updatedAt: Date.now() };
+  if (st.kind === 'local') {
+    const td = trainerData(), arr = (td.localPlans[st.id] = td.localPlans[st.id] || []), i = arr.findIndex(p => p.id === plan.id);
+    plan.createdAt = i >= 0 ? arr[i].createdAt : Date.now(); if (i >= 0) arr[i] = plan; else arr.unshift(plan);
+    saveTrainerData();
+  } else {
+    if (!_fbOk()) { _needLogin(); return; }
+    try {
+      const old = _plansAsPersonal.find(p => p.id === plan.id);
+      await FB.setDoc(FB.docRef('plans', plan.id), { ...plan, createdAt: old ? old.createdAt : Date.now(), personalUid: _fbUser.uid, studentUid: st.uid, studentName: st.name });
+      await refreshPlans();
+    } catch (e) { showToast(_explainErr(e), 6000); return; }
+  }
+  _ptClose('ptPlan'); renderStudent(_pb.key); renderTrainerPlans(true);
+  showToast(st.kind === 'linked' ? '✅ Treino enviado para ' + st.name : '✅ Treino salvo para ' + st.name);
+}
+async function ptDeletePlan(key, id) {
+  if (!confirm('Excluir este treino?')) return;
+  const st = _ptFind(key);
+  if (st.kind === 'local') { const td = trainerData(); td.localPlans[st.id] = (td.localPlans[st.id] || []).filter(p => p.id !== id); saveTrainerData(); }
+  else { try { await FB.deleteDoc(FB.docRef('plans', id)); await refreshPlans(); } catch (e) { showToast(_explainErr(e), 5000); return; } }
+  renderStudent(key); renderTrainerPlans(true);
+}
+
+// ═══ Student side: "Treino montado pelo personal XXX" ═══
+let _planIndex = {}, _planSig = '';
+function _visiblePlans() {
+  const out = [];
+  if (_fbOk()) {
+    const okP = new Set(_links.filter(l => l.status === 'accepted' && l.studentUid === _fbUser.uid).map(l => l.personalUid));
+    _plansAsStudent.filter(p => okP.has(p.personalUid)).forEach(p => out.push(p));
+  }
+  const uid = state.activeUserId || state.activeP1Id;
+  if (uid) (trainerData().localPlans[uid] || []).forEach(p => out.push(p));
+  return out;
+}
+function renderTrainerPlans(force) {
+  const el = _pt$('trainerPlansCard'); if (!el) return;
+  const plans = _visiblePlans();
+  const sig = plans.map(p => p.id + ':' + p.updatedAt).join('|') + '#' + (state.activeUserId || '');
+  if (!force && sig === _planSig) return; _planSig = sig;
+  _planIndex = {}; plans.forEach(p => _planIndex[p.id] = p);
+  if (!plans.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div style="${_ptCard}padding:14px;margin-bottom:14px;border-color:var(--primary);">
+    <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--primary);font-weight:800;margin-bottom:8px;">🏅 Treinos montados pelo personal</div>
+    ${plans.map(p => `<div style="padding:8px 0;border-top:1px solid var(--border);"><div style="font-weight:800;">${_ptEsc(p.title)}</div><div style="font-size:12px;color:var(--muted);">Treino montado pelo personal <b>${_ptEsc(p.personalName)}</b></div>${p.note ? `<div style="font-size:12px;margin:4px 0;font-style:italic;">“${_ptEsc(p.note)}”</div>` : ''}<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">${p.days.map((d, i) => `<button style="${_ptBtnP}padding:7px 12px;" onclick="startPersonalPlan('${p.id}',${i})">▶ ${_ptEsc(d.name)} (${d.exs.length})</button>`).join('')}</div></div>`).join('')}</div>`;
+}
+function startPersonalPlan(id, di) {
+  const p = _planIndex[id], d = p && p.days[di]; if (!d || !d.exs.length) return;
+  if (!ensureAthleteSelected()) return;
+  state.planTargets = {}; d.exs.forEach(e => { state.planTargets[e.ex] = { ...e, planId: p.id, by: p.personalName }; });
+  state.group = d.exs[0].group; state.sheetSelected = d.exs.map(e => e.ex); state.mode = state.mode || 'alone';
+  if (!state.activeTraining) { state.activeTraining = true; state.trainStart = new Date().toISOString(); startTrainTimer(); }
+  updateTrainStatus('training');
+  const ex = d.exs[0].ex; state.selectedEx = ex; state.currentSeries = [];
+  const oc = _pt$('exSheetOverlay'); if (oc) oc.classList.remove('show');
+  const os = _pt$('exSheet'); if (os) os.classList.remove('show');
+  const ec = _pt$('exerciseCard'); if (ec) ec.style.display = 'block';
+  stopTimer(); goPage('exercicio'); prefillLastLoad(ex); renderQueueBar();
+  showToast('🏅 ' + d.name + ' — treino de ' + p.personalName);
+}
+// The personal's targets (séries × reps · kg · descanso) override the "last workout" prefill
+function prefillLastLoad(ex) { _prefillLastLoadBase(ex); try { _applyPlanTarget(ex); } catch (e) { console.warn('[WGym] plan target', e); } }
+function _applyPlanTarget(ex) {
+  const t = state.planTargets && state.planTargets[ex]; if (!t) return;
+  if (t.group) state.group = t.group;
+  const set = (id, v) => { const e = _pt$(id); if (e && v != null && v !== '') e.value = v; };
+  const rest = (id, v) => { const e = _pt$(id); if (!e || !v) return; const o = [...e.options].map(x => parseInt(x.value)); e.value = o.includes(+v) ? v : o.reduce((p, c) => Math.abs(c - v) < Math.abs(p - v) ? c : p); };
+  const aer = isAerobicExercise(ex, state.group);
+  if (aer) { set('aerobSeries', t.sets); set('aerobTempo', t.reps); rest('aerobRest', t.rest); }
+  else { set('series', t.sets); set('p1series', t.sets); set('reps', t.reps); set('p1reps', t.reps); if (t.load > 0) { set('load', t.load); set('p1load', t.load); } rest('rest', t.rest); rest('p1rest', t.rest); }
+  const li = _pt$('lastTrainInfo');
+  if (li) {
+    const meta = '🏅 Meta de ' + t.by + ': ' + t.sets + ' × ' + t.reps + (aer ? 'min' : '') + (t.load > 0 ? ' · ' + t.load + 'kg' : '') + (t.rest > 0 ? ' · desc ' + t.rest + 's' : '');
+    li.textContent = (li.style.display !== 'none' && li.textContent ? li.textContent + '\n' : '') + meta; li.style.whiteSpace = 'pre-line'; li.style.display = 'block';
+  }
+}
+
+// background network tick: register in the directory, load links/plans, refresh periodically
+let _netN = 0;
+setInterval(async () => {
+  try {
+    applyPersonalMode();
+    if (!_fbOk()) return;
+    _netN++;
+    if (!window._dirDone && (window._dirTry || 0) < 3 && !window._dirBusy) { window._dirBusy = true; window._dirTry = (window._dirTry || 0) + 1; await ensureDirectory(); window._dirBusy = false; }
+    if ((!_linksLoaded && (window._lkTry || 0) < 3 || _netN % 20 === 0) && !window._lkBusy) { window._lkTry = (window._lkTry || 0) + 1; window._lkBusy = true; await refreshLinks(true); await refreshPlans(); window._lkBusy = false; renderTrainerPlans(false); }
+  } catch (e) { window._dirBusy = false; window._lkBusy = false; }
+}, 3000);
+setTimeout(applyPersonalMode, 1200);
+
 function syncStopButtons() {
   const on = !!state.activeTraining;
   const card = document.getElementById('exerciseCard');
@@ -3941,7 +4436,7 @@ const CLOUD_SYNC_KEYS = [
   'wgym_users', 'wgym_history', 'wgym_settings', 'wgym_plans',
   'wgym_templates', 'wgym_custom_ex', 'wgym_custom_groups',
   'wgym_favs', 'wgym_rest_defaults', 'wgym_notif', 'wgym_notif_time', 'wgym_notif_days',
-  'wgym_hidden_ex', 'wgym_ex_aliases'
+  'wgym_hidden_ex', 'wgym_ex_aliases', 'wgym_trainer_data', 'wgym_personal_mode'
 ];
 
 let _fbReady = false;
@@ -5225,8 +5720,14 @@ function renderGroupUserPills() {
 function renderDashUserPills() {
   const el = document.getElementById('dashUserPills'); if (!el) return;
   const active = getActiveUsers();
+  const box = document.getElementById('dashUserSearch');
+  const many = active.length > 6;                       // v45: search appears when there are many profiles
+  if (box) { box.style.display = many ? 'block' : 'none'; if (!many) { box.value = ''; state.dashSearch = ''; } }
+  const q = many ? _ptNorm(state.dashSearch || '') : '';
+  const shown = active.filter(u => !q || _ptNorm(u.name).includes(q) || state.dashUserId === u.id);
   let html = `<div class="user-pill ${state.dashUserId===null?'selected':''}" onclick="selectDashUser(null)"><span class="up-avatar">👥</span>Todos</div>`;
-  html += active.map(u => `<div class="user-pill ${state.dashUserId===u.id?'selected':''}" onclick="selectDashUser('${u.id}')"><span class="up-avatar">${u.avatar}</span>${u.name}</div>`).join('');
+  html += shown.map(u => `<div class="user-pill ${state.dashUserId===u.id?'selected':''}" onclick="selectDashUser('${u.id}')"><span class="up-avatar">${u.avatar}</span>${_ptEsc(u.name)}</div>`).join('');
+  if (q) html += `<div style="width:100%;font-size:12px;color:var(--muted);padding:2px 4px;">${shown.length ? shown.length + ' de ' + active.length + ' alunos' : 'Nenhum aluno encontrado'}</div>`;
   el.innerHTML = html;
 }
 
@@ -5270,7 +5771,7 @@ function selectDashUser(id) { state.dashUserId=id; renderDashUserPills(); render
 // ═══════════════════════════════════════════════════════
 // NAVIGATION
 // ═══════════════════════════════════════════════════════
-const PAGES = ['dashboard','treino','exercicio','historico','planos','configuracoes'];
+const PAGES = ['dashboard','treino','exercicio','historico','planos','configuracoes','personal'];
 function goPage(p, tabEl) {
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
@@ -5286,6 +5787,11 @@ function goPage(p, tabEl) {
   if (p==='configuracoes') renderSettings();
   if (p==='planos') { renderPlanos(); }
   try { syncStopButtons(); } catch(e) {}
+  try {
+    applyPersonalMode();
+    if (p === 'personal') { renderPersonalPage(); ptRefreshAll(false); const nt = _pt$('navPersonal'); if (nt && nt.scrollIntoView) nt.scrollIntoView({ inline: 'center', block: 'nearest' }); }
+    if (p === 'treino') { renderTrainerPlans(true); refreshPlans().then(() => renderTrainerPlans(true)); }
+  } catch(e) { console.warn('[WGym] personal hooks', e); }
   if (p === 'treino' && !window._lastModeApplied) {
     window._lastModeApplied = true;
     try {
@@ -6586,7 +7092,7 @@ function warmExerciseCacheFromHistory() {
   if (seen.size > 0) console.log('[WGym] Cache warmed for', seen.size, 'exercises');
 }
 
-function prefillLastLoad(ex) {
+function _prefillLastLoadBase(ex) {
   if (!ex) return;
 
   // ── Always reset inputs to safe defaults first ──
@@ -7190,7 +7696,7 @@ function concludeExercise() {
 
   // v36: build the entry, then update ALL in-memory state first, so a failure
   // in any later step (storage, rendering) can never leave a half-concluded exercise.
-  const entry = {id:Date.now(),date:new Date().toISOString(),exercise:exerciseName,group:state.group,mode:state.mode,p1name:state.p1name,p2name:state.p2name,userId:uid||null,userId2:uid2||null,groupUserIds,series:[...state.currentSeries],notes,trainStart:state.trainStart,isAerobic};
+  const entry = {id:Date.now(),date:new Date().toISOString(),exercise:exerciseName,group:state.group,mode:state.mode,p1name:state.p1name,p2name:state.p2name,userId:uid||null,userId2:uid2||null,groupUserIds,series:[...state.currentSeries],notes,trainStart:state.trainStart,isAerobic,planId:((state.planTargets||{})[exerciseName]||{}).planId||null};
   history.unshift(entry);
   if(!state.completedEx[state.group])state.completedEx[state.group]=[];
   if(!state.completedEx[state.group].includes(exerciseName))state.completedEx[state.group].push(exerciseName);
@@ -7502,6 +8008,7 @@ function confirmStopTraining() {
 }
 
 function concludeTraining() {
+  state.planTargets = null;
   if(!state.activeTraining){showToast('Nenhum treino em andamento');return;}
 
   // Snapshot data BEFORE clearing state
