@@ -2255,6 +2255,17 @@ select.form-input option { background: var(--card2); color: var(--text); }
         <label class="auth-label">Confirmar Senha</label>
         <input class="auth-input" type="password" id="regConfirm" placeholder="Repita a senha" autocomplete="new-password">
       </div>
+      <div class="auth-field">
+        <label class="auth-label">Tipo de conta</label>
+        <div style="display:flex;gap:8px;">
+          <div id="regRoleStudent" onclick="setRegRole('student')" style="flex:1;text-align:center;padding:12px 8px;border-radius:12px;cursor:pointer;border:1.5px solid var(--primary);background:rgba(255,61,37,.12);">
+            <div style="font-size:22px;">🏋️</div><div style="font-weight:800;font-size:13px;">Aluno / Atleta</div><div style="font-size:11px;color:var(--muted);">Quero registrar meus treinos</div>
+          </div>
+          <div id="regRolePersonal" onclick="setRegRole('personal')" style="flex:1;text-align:center;padding:12px 8px;border-radius:12px;cursor:pointer;border:1.5px solid var(--border);background:transparent;">
+            <div style="font-size:22px;">🏅</div><div style="font-weight:800;font-size:13px;">Personal Trainer</div><div style="font-size:11px;color:var(--muted);">Acompanho e monto treinos de alunos</div>
+          </div>
+        </div>
+      </div>
       <div class="auth-error" id="regError">Verifique os dados e tente novamente.</div>
       <button class="auth-btn" onclick="doRegister()">Criar Conta →</button>
       <div class="auth-terms">Seus dados ficam armazenados localmente neste dispositivo.</div>
@@ -4622,6 +4633,15 @@ function selectRegAvatar(em) {
   renderRegEmojiGrid();
 }
 
+let _regRole = 'student';
+function setRegRole(r) {
+  _regRole = r === 'personal' ? 'personal' : 'student';
+  const on = 'border:1.5px solid var(--primary);background:rgba(255,61,37,.12);', off = 'border:1.5px solid var(--border);background:transparent;';
+  const a = document.getElementById('regRoleStudent'), b = document.getElementById('regRolePersonal');
+  const base = 'flex:1;text-align:center;padding:12px 8px;border-radius:12px;cursor:pointer;';
+  if (a) a.style.cssText = base + (_regRole === 'student' ? on : off);
+  if (b) b.style.cssText = base + (_regRole === 'personal' ? on : off);
+}
 async function doRegister() {
   const name = document.getElementById('regName').value.trim();
   const email = document.getElementById('regEmail').value.trim().toLowerCase();
@@ -4667,6 +4687,13 @@ async function doRegister() {
   saveAccounts();
   loginAccount(account);
   if (registerBtn) { registerBtn.disabled = false; registerBtn.textContent = 'Criar Conta →'; }
+  if (_regRole === 'personal') {                       // v46: account created as Personal Trainer
+    try { localStorage.setItem('wgym_personal_mode', '1'); } catch (e) {}
+    window._dirDone = false; window._dirTry = 0;
+    try { applyPersonalMode(); } catch (e) {}
+    setTimeout(() => { try { goPage('personal'); } catch (e) {} }, 400);
+    showToast('🏅 Conta de Personal Trainer criada! Bem-vindo, ' + name + '!', 4000);
+  } else
   showToast('🎉 Conta criada! Bem-vindo, ' + name + '!');
   if (account.cloud) pushAllLocalDataToCloud();
 }
