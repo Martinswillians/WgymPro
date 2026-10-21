@@ -1,6 +1,6 @@
 rules_version = '2';
 // ─────────────────────────────────────────────────────────────────────────────
-// Will Gym PRO — regras do Firestore (v47: vínculo personal ↔ aluno)
+// Will Gym PRO — regras do Firestore (v48: vínculo personal ↔ aluno + notificações)
 // Publique em: Firebase Console → Firestore Database → Regras.
 // ATENÇÃO: se você já tem regras para  users/{uid}/...  mantenha o bloco "users" abaixo
 // (ou mescle). Sem estas regras o app continua funcionando normalmente para treinar,
@@ -65,6 +65,21 @@ service cloud.firestore {
           (get(/databases/$(database)/documents/links/$(linkId)).data.personalUid == request.auth.uid
            || get(/databases/$(database)/documents/links/$(linkId)).data.studentUid == request.auth.uid);
       }
+    }
+
+    // Notificações (sininho): quem tem vínculo com o destinatário pode criar; só o destinatário lê, marca como lida e apaga
+    match /notifications/{nid} {
+      allow get: if signedIn() && (resource == null || resource.data.toUid == request.auth.uid);
+      allow list: if signedIn() && resource.data.toUid == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.toUid != request.auth.uid
+        && request.resource.data.read == false
+        && (exists(/databases/$(database)/documents/links/$(request.auth.uid + '_' + request.resource.data.toUid))
+            || exists(/databases/$(database)/documents/links/$(request.resource.data.toUid + '_' + request.auth.uid)));
+      allow update: if signedIn() && resource.data.toUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if signedIn() && resource.data.toUid == request.auth.uid;
     }
 
     // Treinos montados pelo personal para o aluno

@@ -338,6 +338,8 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .timed-phase{font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
 .timed-clock{font-size:56px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1;margin:6px 0;color:var(--text);}
 .timed-sub{font-size:12px;color:var(--muted);margin-bottom:12px;}
+@keyframes bellRing{0%,100%{transform:rotate(0)}15%{transform:rotate(18deg)}30%{transform:rotate(-16deg)}45%{transform:rotate(12deg)}60%{transform:rotate(-8deg)}75%{transform:rotate(4deg)}}
+.bell-ring{animation:bellRing .9s ease 2;transform-origin:50% 15%;}
 @keyframes timedFlash{0%,100%{box-shadow:0 0 0 0 rgba(255,184,0,0);background:rgba(59,130,246,.12);}50%{box-shadow:0 0 0 6px rgba(255,184,0,.9);background:rgba(255,184,0,.38);}}
 .timed-panel.timed-alert{animation:timedFlash .5s ease-in-out infinite;border-color:#FFB800;}
 /* ── Suggested mode combo pills ── */
@@ -2298,6 +2300,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div id="trainStatus" class="status-chip chip-yellow">Aguardando Início</div>
       <button id="stopTrainBtn" class="hdr-stop-btn" onclick="confirmStopTraining()" title="Encerrar treino" style="display:none;">■</button>
       <div class="train-timer-header" id="headerTimer">00:00</div>
+      <button class="hdr-btn" id="bellBtn" onclick="toggleNotifPanel()" title="Notificações" aria-label="Notificações" style="position:relative;overflow:visible;">🔔<span id="bellBadge" style="display:none;position:absolute;top:-6px;right:-6px;min-width:17px;height:17px;border-radius:9px;background:#ef4444;color:#fff;font-size:10px;font-weight:800;line-height:17px;text-align:center;padding:0 4px;box-shadow:0 0 0 2px var(--bg,#0D0D0F);"></span></button>
       <button class="hdr-btn" id="themeBtn" onclick="toggleTheme()" title="Tema">🌙</button>
       <div class="hdr-user" id="hdrUser" onclick="goPage('config')" title="Perfil">🏋️</div>
     </div>
@@ -2961,7 +2964,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
     </div>
     <div class="settings-item" onclick="openLinksModal()">
-      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v47</div></div></div>
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v48</div></div></div>
       <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
     </div>
   </div>
@@ -3943,6 +3946,7 @@ async function sendLinkRequest(raw) {
     }
     step = 'criar convite';
     await FB.setDoc(FB.docRef('links', id), { personalUid: P.uid, personalName: P.name, personalEmail: P.email, studentUid: S.uid, studentName: S.name, studentEmail: S.email, status: 'pending', requestedBy: amP ? 'personal' : 'student', createdAt: FB.serverTimestamp(), updatedAt: FB.serverTimestamp() });
+    ptNotify(t.uid, 'invite', 'Convite de vínculo', me.name + (amP ? ' quer ser o seu personal' : ' quer ser seu aluno'), { linkId: id });
     await refreshLinks(true); showToast('📨 Solicitação enviada para ' + (t.name || email)); return true;
   } catch (e) { showToast(_explainErr(e) + ' [etapa: ' + step + ']', 7000); return false; }
 }
@@ -3950,12 +3954,22 @@ async function setLinkStatus(id, status) {
   try {
     if (status === 'removed') {
       const l = _links.find(x => x.id === id);
+      if (l) {   // notify BEFORE deleting (the security rule needs the link to still exist)
+        const o = l.personalUid === _fbUser.uid ? l.studentUid : l.personalUid;
+        const inc = l.status === 'pending' && l.requestedBy !== _myRole(l);
+        const k = l.status === 'accepted' ? 'removed' : inc ? 'declined' : 'canceled';
+        await ptNotify(o, k, k === 'removed' ? 'Vínculo removido' : k === 'declined' ? 'Convite recusado' : 'Convite cancelado', _me().name + (k === 'removed' ? ' removeu o vínculo com você' : k === 'declined' ? ' recusou o seu convite' : ' cancelou o convite'), { linkId: id });
+      }
       if (l && l.studentUid === _fbUser.uid) {                         // student leaving: drop the personal's plans for me
         const mine = _plansAsStudent.filter(p => p.personalUid === l.personalUid);
         for (const p of mine) { try { await FB.deleteDoc(FB.docRef('plans', p.id)); } catch (e) {} }
       }
       await FB.deleteDoc(FB.docRef('links', id));
-    } else await FB.setDoc(FB.docRef('links', id), { status, updatedAt: FB.serverTimestamp() }, { merge: true });
+    } else {
+      await FB.setDoc(FB.docRef('links', id), { status, updatedAt: FB.serverTimestamp() }, { merge: true });
+      const l = _links.find(x => x.id === id);
+      if (status === 'accepted' && l) await ptNotify(l.personalUid === _fbUser.uid ? l.studentUid : l.personalUid, 'accepted', 'Convite aceito', _me().name + ' aceitou o seu convite', { linkId: id });
+    }
     await refreshLinks(true); await refreshPlans();
     renderLinksModal(); try { renderPersonalList(); renderTrainerPlans(true); } catch (e) {}
     if (status === 'accepted') showToast('✅ Vínculo aceito!');
@@ -3996,7 +4010,7 @@ function renderLinksModal() {
     ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
     ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
     ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
-    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v47</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v48</div>`;
 }
 async function ptSendFromInput() {
   const inp = _pt$('ptLinkEmail'); if (!inp) return;
@@ -4025,7 +4039,7 @@ async function ptChatLoad() {
 async function ptChatSend() {
   const inp = _pt$('ptChatInput'); if (!inp || !_chat) return;
   const text = inp.value.trim(); if (!text) return; inp.value = '';
-  try { const me = _me(); await FB.setDoc(FB.docRef('links', _chat.linkId, 'messages', 'm' + Date.now()), { from: me.uid, name: me.name, text, ts: Date.now() }); await ptChatLoad(); }
+  try { const me = _me(); await FB.setDoc(FB.docRef('links', _chat.linkId, 'messages', 'm' + Date.now()), { from: me.uid, name: me.name, text, ts: Date.now() }); const _l = _links.find(x => x.id === _chat.linkId); if (_l) ptNotify(_l.personalUid === me.uid ? _l.studentUid : _l.personalUid, 'message', 'Novo recado de ' + me.name, text, { linkId: _chat.linkId }); await ptChatLoad(); }
   catch (e) { showToast(_explainErr(e), 5000); inp.value = text; }
 }
 
@@ -4223,6 +4237,7 @@ async function _pbSave() {
       const old = _plansAsPersonal.find(p => p.id === plan.id);
       await FB.setDoc(FB.docRef('plans', plan.id), { ...plan, createdAt: old ? old.createdAt : Date.now(), personalUid: _fbUser.uid, studentUid: st.uid, studentName: st.name });
       await refreshPlans();
+      ptNotify(st.uid, old ? 'plan_update' : 'plan_new', old ? 'Treino atualizado' : 'Novo treino', 'Seu personal ' + me + (old ? ' atualizou o treino "' : ' montou o treino "') + plan.title + '"', { linkId: _fbUser.uid + '_' + st.uid, planId: plan.id });
     } catch (e) { showToast(_explainErr(e), 6000); return; }
   }
   _ptClose('ptPlan'); renderStudent(_pb.key); renderTrainerPlans(true);
@@ -4248,21 +4263,25 @@ function _visiblePlans() {
   if (uid) (trainerData().localPlans[uid] || []).forEach(p => out.push(p));
   return out;
 }
+function ptMyPersonals() { return _fbOk() ? _links.filter(l => l.status === 'accepted' && l.studentUid === _fbUser.uid) : []; }
 function renderTrainerPlans(force) {
   const el = _pt$('trainerPlansCard'); if (!el) return;
-  const plans = _visiblePlans();
-  const sig = plans.map(p => p.id + ':' + p.updatedAt).join('|') + '#' + (state.activeUserId || '');
+  const plans = _visiblePlans(), mine = ptMyPersonals();
+  const sig = plans.map(p => p.id + ':' + p.updatedAt).join('|') + '#' + (state.activeUserId || '') + '#' + mine.map(l => l.id).join(',');
   if (!force && sig === _planSig) return; _planSig = sig;
   _planIndex = {}; plans.forEach(p => _planIndex[p.id] = p);
-  if (!plans.length) { el.innerHTML = ''; return; }
+  if (!plans.length && !mine.length) { el.innerHTML = ''; return; }
+  const sb = 'padding:6px 10px;font-size:12px;';
+  const req = mine.map(l => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px;"><span style="font-size:12px;color:var(--muted);">Personal <b>${_ptEsc(l.personalName)}</b>:</span><button style="${_ptBtn}${sb}" onclick="ptRequestPlan('${l.id}','new')">🆕 Pedir treino novo</button><button style="${_ptBtn}${sb}" onclick="ptRequestPlan('${l.id}','update')">🔄 Pedir atualização</button><button style="${_ptBtn}${sb}" onclick="openChat('${l.id}')">💬</button></div>`).join('');
   el.innerHTML = `<div style="${_ptCard}padding:14px;margin-bottom:14px;border-color:var(--primary);">
     <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--primary);font-weight:800;margin-bottom:8px;">🏅 Treinos montados pelo personal</div>
-    ${plans.map(p => `<div style="padding:8px 0;border-top:1px solid var(--border);"><div style="font-weight:800;">${_ptEsc(p.title)}</div><div style="font-size:12px;color:var(--muted);">Treino montado pelo personal <b>${_ptEsc(p.personalName)}</b></div>${p.note ? `<div style="font-size:12px;margin:4px 0;font-style:italic;">“${_ptEsc(p.note)}”</div>` : ''}<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">${p.days.map((d, i) => `<button style="${_ptBtnP}padding:7px 12px;" onclick="startPersonalPlan('${p.id}',${i})">▶ ${_ptEsc(d.name)} (${d.exs.length})</button>`).join('')}</div></div>`).join('')}</div>`;
+    ${plans.length ? plans.map(p => `<div style="padding:8px 0;border-top:1px solid var(--border);"><div style="font-weight:800;">${_ptEsc(p.title)}</div><div style="font-size:12px;color:var(--muted);">Treino montado pelo personal <b>${_ptEsc(p.personalName)}</b></div>${p.note ? `<div style="font-size:12px;margin:4px 0;font-style:italic;">“${_ptEsc(p.note)}”</div>` : ''}<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">${p.days.map((d, i) => `<button style="${_ptBtnP}padding:7px 12px;" onclick="startPersonalPlan('${p.id}',${i})">▶ ${_ptEsc(d.name)} (${d.exs.length})</button>`).join('')}</div></div>`).join('') : '<div style="font-size:13px;color:var(--muted);padding:4px 0;">Seu personal ainda não montou um treino para você.</div>'}
+    ${req}</div>`;
 }
 function startPersonalPlan(id, di) {
   const p = _planIndex[id], d = p && p.days[di]; if (!d || !d.exs.length) return;
   if (!ensureAthleteSelected()) return;
-  state.planTargets = {}; d.exs.forEach(e => { state.planTargets[e.ex] = { ...e, planId: p.id, by: p.personalName }; });
+  state.planTargets = {}; d.exs.forEach(e => { state.planTargets[e.ex] = { ...e, planId: p.id, by: p.personalName, personalUid: p.personalUid || null }; });
   state.group = d.exs[0].group; state.sheetSelected = d.exs.map(e => e.ex); state.mode = state.mode || 'alone';
   if (!state.activeTraining) { state.activeTraining = true; state.trainStart = new Date().toISOString(); startTrainTimer(); }
   updateTrainStatus('training');
@@ -4297,11 +4316,132 @@ setInterval(async () => {
     applyPersonalMode();
     if (!_fbOk()) return;
     _netN++;
+    if (_netN % 10 === 1 && !window._ntBusy) { window._ntBusy = true; try { await refreshNotifs(true); } finally { window._ntBusy = false; } }   // every ~30 s
     if (!window._dirDone && (window._dirTry || 0) < 3 && !window._dirBusy) { window._dirBusy = true; window._dirTry = (window._dirTry || 0) + 1; await ensureDirectory(); window._dirBusy = false; }
     if ((!_linksLoaded && (window._lkTry || 0) < 3 || _netN % 20 === 0) && !window._lkBusy) { window._lkTry = (window._lkTry || 0) + 1; window._lkBusy = true; await refreshLinks(true); await refreshPlans(); window._lkBusy = false; renderTrainerPlans(false); }
   } catch (e) { window._dirBusy = false; window._lkBusy = false; }
 }, 3000);
 setTimeout(applyPersonalMode, 1200);
+
+// ═══════════════════════════════════════════════════════════════════
+// v48 — NOTIFICATIONS (sininho 🔔)
+// Each event writes a document in  notifications/{id}  addressed to the other person
+// ({toUid, fromUid, type, title, body, ts, read}). The recipient polls its own notifications
+// (every ~30 s while the app is open, and when the app comes back to the foreground).
+// ═══════════════════════════════════════════════════════════════════
+let _notifs = [], _notifLoaded = false, _notifErr = null;
+const _NOTIF_ICON = { invite: '📨', accepted: '✅', declined: '🚫', canceled: '🚫', removed: '🚫', plan_new: '🏅', plan_update: '🔄', message: '💬', request_new: '🆕', request_update: '🔄', workout_done: '💪' };
+function _ptTimeAgo(ts) { const m = Math.floor((Date.now() - ts) / 60000); if (m < 1) return 'agora'; if (m < 60) return m + ' min'; const h = Math.floor(m / 60); if (h < 24) return h + ' h'; const d = Math.floor(h / 24); return d + (d === 1 ? ' dia' : ' dias'); }
+async function ptNotify(toUid, type, title, body, extra) {
+  try {
+    if (!_fbOk() || !toUid || toUid === _fbUser.uid) return false;
+    const me = _me(), id = 'n' + Date.now() + Math.random().toString(36).slice(2, 6);
+    await FB.setDoc(FB.docRef('notifications', id), { toUid, fromUid: me.uid, fromName: me.name, type, title, body: String(body || '').slice(0, 200), ts: Date.now(), read: false, ...(extra || {}) });
+    return true;
+  } catch (e) { console.warn('[WGym] notification not sent (publish the updated firestore.rules?)', e); return false; }   // never blocks the real action
+}
+function _seenSet() { try { return new Set(JSON.parse(localStorage.getItem('wgym_notif_seen') || '[]')); } catch (e) { return new Set(); } }
+function _saveSeen(set) { try { localStorage.setItem('wgym_notif_seen', JSON.stringify([...set].slice(-300))); } catch (e) {} }
+async function refreshNotifs(quiet) {
+  if (!_fbOk()) { renderBell(); return false; }
+  try {
+    const rows = await FB.queryDocs(['notifications'], 'toUid', _fbUser.uid);
+    const list = rows.map(r => ({ id: r.id, ...r.data })).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 60);
+    const seen = _seenSet(), fresh = list.filter(n => !n.read && !seen.has(n.id));
+    list.forEach(n => seen.add(n.id)); _saveSeen(seen);
+    const first = !_notifLoaded; _notifs = list; _notifErr = null; _notifLoaded = true;
+    renderBell(); if (_pt$('notifPanel')) renderNotifPanel();
+    if (fresh.length) _notifAlert(fresh, first);
+    return true;
+  } catch (e) { _notifErr = e; renderBell(); if (!quiet) showToast(_explainErr(e), 5000); return false; }
+}
+function _notifAlert(fresh, first) {
+  if (first) showToast('🔔 Você tem ' + fresh.length + (fresh.length > 1 ? ' notificações novas' : ' notificação nova'), 5000);
+  else fresh.slice(0, 3).forEach((n, i) => setTimeout(() => showToast((_NOTIF_ICON[n.type] || '🔔') + ' ' + n.title + (n.body ? ' — ' + n.body : ''), 5000), i * 1200));
+  try { if (settings.vibration && navigator.vibrate) navigator.vibrate(first ? [120] : [120, 80, 120]); } catch (e) {}
+  const b = _pt$('bellBtn'); if (b) { b.classList.remove('bell-ring'); void b.offsetWidth; b.classList.add('bell-ring'); }
+  try {   // system notification when the app is in the background (needs permission, see the panel footer)
+    if (document.hidden && 'Notification' in window && Notification.permission === 'granted')
+      fresh.slice(0, 3).forEach(n => new Notification('Will Gym — ' + n.title, { body: n.body || '', tag: n.id }));
+  } catch (e) {}
+}
+function renderBell() {
+  const n = _notifs.filter(x => !x.read).length, bd = _pt$('bellBadge');
+  if (bd) { bd.style.display = n ? 'block' : 'none'; bd.textContent = n > 9 ? '9+' : n; }
+  const bt = _pt$('bellBtn'); if (bt) bt.title = n ? n + ' notificação(ões) não lida(s)' : 'Notificações';
+}
+function closeNotifPanel() { ['notifPanel', 'notifBackdrop'].forEach(id => { const e = _pt$(id); if (e) e.remove(); }); }
+function toggleNotifPanel() { if (_pt$('notifPanel')) { closeNotifPanel(); return; } openNotifPanel(); }
+function openNotifPanel() {
+  if (!_fbOk()) { showToast('🔔 Entre com a sua conta (não como visitante) para receber notificações'); return; }
+  const bd = document.createElement('div'); bd.id = 'notifBackdrop'; bd.style.cssText = 'position:fixed;inset:0;z-index:9989;'; bd.onclick = closeNotifPanel;
+  const r = (_pt$('bellBtn') || document.body).getBoundingClientRect();
+  const p = document.createElement('div'); p.id = 'notifPanel';
+  const w = Math.min(390, window.innerWidth - 16), left = Math.min(Math.max(8, Math.round(r.right - w)), window.innerWidth - w - 8);
+  p.style.cssText = `position:fixed;z-index:9990;top:${Math.round(r.bottom + 8)}px;left:${left}px;width:${w}px;max-height:72vh;overflow-y:auto;${_ptCard}border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.55);`;
+  document.body.append(bd, p); renderNotifPanel(); refreshNotifs(true);
+}
+function _attentionItems() {
+  if (!_isPersonal()) return [];
+  try { const bad = _studentList().filter(s => s.stats.att.score >= 2); if (!bad.length) return [];
+    return [{ icon: '⚠️', title: bad.length + (bad.length > 1 ? ' alunos precisam de atenção' : ' aluno precisa de atenção'), body: bad.slice(0, 3).map(s => s.name).join(', ') + (bad.length > 3 ? '…' : ''), act: "closeNotifPanel();goPage('personal')" }]; } catch (e) { return []; }
+}
+function renderNotifPanel() {
+  const p = _pt$('notifPanel'); if (!p) return;
+  const unread = _notifs.filter(n => !n.read).length, att = _attentionItems();
+  const denied = _notifErr && (_notifErr.code === 'permission-denied' || /permission/i.test(_notifErr.message || ''));
+  const row = (icon, title, body, meta, unreadDot, act) => `<div onclick="${act}" style="display:flex;gap:10px;padding:11px 14px;border-top:1px solid var(--border);cursor:pointer;${unreadDot ? 'background:rgba(255,61,37,.07);' : ''}"><div style="font-size:22px;flex:none;">${icon}</div><div style="min-width:0;flex:1;"><div style="font-weight:${unreadDot ? 800 : 600};font-size:14px;">${_ptEsc(title)}</div>${body ? `<div style="font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${_ptEsc(body)}</div>` : ''}${meta ? `<div style="font-size:11px;color:var(--muted);margin-top:2px;">${meta}</div>` : ''}</div>${unreadDot ? '<div style="width:9px;height:9px;border-radius:50%;background:var(--primary);flex:none;margin-top:6px;"></div>' : ''}</div>`;
+  const supportsSys = 'Notification' in window, perm = supportsSys ? Notification.permission : 'unsupported';
+  p.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;"><div style="font-family:var(--font-display);font-size:17px;font-weight:800;text-transform:uppercase;">🔔 Notificações${unread ? ` <span style="color:var(--primary);">(${unread})</span>` : ''}</div>
+      <div style="display:flex;gap:6px;"><button style="${_ptBtn}padding:5px 9px;font-size:11px;" onclick="ptMarkAllRead()">✓ Lidas</button><button style="${_ptBtn}padding:5px 9px;font-size:11px;" onclick="ptClearNotifs()">🗑 Limpar</button></div></div>
+    ${denied ? `<div style="padding:10px 14px;font-size:12px;color:#f59e0b;border-top:1px solid var(--border);">Para ativar os avisos, publique as regras atualizadas do arquivo firestore.rules no Firebase.</div>` : ''}
+    ${att.map(a => row(a.icon, a.title, a.body, 'Alerta do painel', false, a.act)).join('')}
+    ${_notifs.length ? _notifs.map(n => row(_NOTIF_ICON[n.type] || '🔔', n.title, n.body, _ptEsc(n.fromName || '') + ' · ' + _ptTimeAgo(n.ts), !n.read, `ptNotifOpen('${n.id}')`)).join('') : (att.length ? '' : '<div style="padding:26px 14px;text-align:center;color:var(--muted);font-size:13px;border-top:1px solid var(--border);">Nenhuma notificação por enquanto.</div>')}
+    <div style="padding:10px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);line-height:1.5;">${perm === 'default' ? `<button style="${_ptBtn}padding:6px 10px;font-size:12px;width:100%;margin-bottom:6px;" onclick="ptEnableSystemNotif()">🔔 Ativar avisos do aparelho</button>` : ''}${perm === 'granted' ? '✓ Avisos do aparelho ativados. ' : ''}${perm === 'denied' ? 'Avisos do aparelho bloqueados no navegador. ' : ''}As notificações chegam enquanto o app está aberto (ou ao abri-lo).</div>`;
+}
+function ptEnableSystemNotif() {
+  if (!('Notification' in window)) { showToast('Este navegador não suporta avisos do sistema'); return; }
+  Notification.requestPermission().then(r => { showToast(r === 'granted' ? '🔔 Avisos do aparelho ativados' : 'Permissão não concedida'); renderNotifPanel(); });
+}
+async function _setRead(n) { n.read = true; try { await FB.setDoc(FB.docRef('notifications', n.id), { read: true }, { merge: true }); } catch (e) { console.warn(e); } }
+async function ptMarkAllRead() { const u = _notifs.filter(n => !n.read); u.forEach(n => n.read = true); renderBell(); renderNotifPanel(); await Promise.all(u.map(n => FB.setDoc(FB.docRef('notifications', n.id), { read: true }, { merge: true }).catch(() => {}))); }
+async function ptClearNotifs() { const all = _notifs.slice(); _notifs = []; renderBell(); renderNotifPanel(); await Promise.all(all.map(n => FB.deleteDoc(FB.docRef('notifications', n.id)).catch(() => {}))); }
+async function ptNotifOpen(id) {
+  const n = _notifs.find(x => x.id === id); if (!n) return;
+  if (!n.read) { n.read = true; renderBell(); _setRead(n); }
+  closeNotifPanel();
+  switch (n.type) {
+    case 'plan_new': case 'plan_update': await refreshPlans(); goPage('treino'); renderTrainerPlans(true); break;
+    case 'message': { if (!_links.find(l => l.id === n.linkId)) await refreshLinks(true); openChat(n.linkId); break; }
+    case 'request_new': case 'request_update': case 'workout_done': goPage('personal'); await ptRefreshAll(false); openStudentModal('R:' + n.fromUid); break;
+    default: openLinksModal();   // invite / accepted / declined / canceled / removed
+  }
+}
+
+// Student → personal: ask for a new workout / an update
+async function ptRequestPlan(linkId, kind) {
+  const l = _links.find(x => x.id === linkId); if (!l || !_fbOk()) return;
+  const key = 'wgym_req_' + linkId + '_' + kind;
+  if (Date.now() - (+localStorage.getItem(key) || 0) < 6 * 3600e3) { showToast('Você já fez esse pedido há pouco — aguarde o retorno do seu personal.', 5000); return; }
+  const note = prompt(kind === 'new' ? 'Que treino você quer? (objetivo, dias por semana, equipamentos…) — opcional' : 'O que você quer ajustar no treino atual? — opcional', '');
+  if (note === null) return;
+  const nm = _me().name, txt = note.trim();
+  const ok = await ptNotify(l.personalUid, kind === 'new' ? 'request_new' : 'request_update', kind === 'new' ? 'Pedido de treino novo' : 'Pedido de treino atualizado', nm + ' pediu ' + (kind === 'new' ? 'um treino novo' : 'uma atualização do treino') + (txt ? ': ' + txt : ''), { linkId });
+  if (ok) { try { localStorage.setItem(key, Date.now()); } catch (e) {} showToast('📨 Pedido enviado ao personal ' + (l.personalName || '')); }
+  else showToast('⚠️ Não foi possível enviar o pedido. Confira se as regras do firestore.rules estão publicadas.', 6000);
+}
+// Student finished a workout built by the personal → tell the personal
+function ptNotifyWorkoutDone(targets, trainStart) {
+  if (!targets || !_fbOk() || !trainStart) return;
+  const entries = history.filter(h => h.trainStart === trainStart && h.planId), byP = {};
+  Object.values(targets).forEach(t => { if (t.personalUid) (byP[t.personalUid] = byP[t.personalUid] || new Set()).add(t.planId); });
+  Object.entries(byP).forEach(([puid, ids]) => {
+    const n = entries.filter(h => ids.has(h.planId)).length; if (!n) return;
+    ptNotify(puid, 'workout_done', 'Treino concluído', _me().name + ' concluiu ' + n + ' exercício' + (n > 1 ? 's' : '') + ' do treino que você montou', { linkId: puid + '_' + _fbUser.uid });
+  });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && _fbOk()) { refreshNotifs(true); } });
 
 function syncStopButtons() {
   const on = !!state.activeTraining;
@@ -8047,6 +8187,7 @@ function confirmStopTraining() {
 }
 
 function concludeTraining() {
+  try { ptNotifyWorkoutDone(state.planTargets, state.trainStart); } catch (e) { console.warn(e); }
   state.planTargets = null;
   if(!state.activeTraining){showToast('Nenhum treino em andamento');return;}
 
