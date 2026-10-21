@@ -1,6 +1,6 @@
 rules_version = '2';
 // ─────────────────────────────────────────────────────────────────────────────
-// Will Gym PRO — regras do Firestore (v45: vínculo personal ↔ aluno)
+// Will Gym PRO — regras do Firestore (v47: vínculo personal ↔ aluno)
 // Publique em: Firebase Console → Firestore Database → Regras.
 // ATENÇÃO: se você já tem regras para  users/{uid}/...  mantenha o bloco "users" abaixo
 // (ou mescle). Sem estas regras o app continua funcionando normalmente para treinar,
@@ -36,7 +36,10 @@ service cloud.firestore {
 
     // Vínculos: id = personalUid_studentUid
     match /links/{linkId} {
-      allow read: if signedIn() &&
+      // get() de um vínculo que ainda não existe precisa ser permitido (resource == null)
+      allow get: if signedIn() && (resource == null ||
+        resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
+      allow list: if signedIn() &&
         (resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
       allow create: if signedIn()
         && linkId == request.resource.data.personalUid + '_' + request.resource.data.studentUid
@@ -66,7 +69,9 @@ service cloud.firestore {
 
     // Treinos montados pelo personal para o aluno
     match /plans/{planId} {
-      allow read: if signedIn() &&
+      allow get: if signedIn() && (resource == null ||
+        resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
+      allow list: if signedIn() &&
         (resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
       allow create, update: if signedIn()
         && request.resource.data.personalUid == request.auth.uid

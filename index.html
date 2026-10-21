@@ -2961,7 +2961,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
     </div>
     <div class="settings-item" onclick="openLinksModal()">
-      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail</div></div></div>
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v47</div></div></div>
       <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
     </div>
   </div>
@@ -3867,7 +3867,7 @@ function _me() { return { uid: _fbUser.uid, name: (currentAccount && currentAcco
 function _explainErr(e) {
   _fbErr = e;
   if (e && (e.code === 'permission-denied' || /permission/i.test(e.message || '')))
-    return '🔒 O Firebase ainda não tem as regras do vínculo personal ↔ aluno publicadas (arquivo firestore.rules).';
+    return '🔒 O Firebase negou a operação. Confira se as regras do arquivo firestore.rules estão publicadas.';
   return '⚠️ Não foi possível falar com o servidor. Confira a internet e tente de novo.';
 }
 function _needLogin() { showToast('🔒 Entre com a sua conta (não como visitante) e conecte-se à internet'); }
@@ -3913,27 +3913,38 @@ async function fetchLinkedHistory(uid) {
   } catch (e) { _explainErr(e); _linkedHist[uid] = _linkedHist[uid] || []; _linkedHist[uid]._err = true; }
   return _linkedHist[uid];
 }
+// Fixes the common typo "…@gmail" (missing ".com") for the big providers
+function _ptFixEmail(raw) {
+  let e = String(raw || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (/@(gmail|hotmail|outlook|yahoo|icloud|live)$/.test(e)) e += '.com';
+  return e;
+}
 async function sendLinkRequest(raw) {
   if (!_fbOk()) { _needLogin(); return false; }
-  const email = String(raw || '').trim().toLowerCase();
-  if (!/^\S+@\S+\.\S+$/.test(email)) { showToast('Digite um e-mail válido'); return false; }
+  const email = _ptFixEmail(raw);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showToast(/@[^.@]*$/.test(email) || /@[^@]+\.$/.test(email) ? 'E-mail incompleto — falta o final (ex.: .com)?' : 'Digite um e-mail válido', 4500); return false; }
   const me = _me();
   if (email === me.email.toLowerCase()) { showToast('Esse é o seu próprio e-mail'); return false; }
+  let step = 'diretório';
   try {
     const snap = await FB.getDoc(FB.docRef('directory', _ptEmailKey(email)));
-    if (!snap.exists()) { showToast('Nenhuma conta com esse e-mail usa o Will Gym (ainda)', 5000); return false; }
+    if (!snap.exists()) { showToast('Nenhuma conta com esse e-mail usa o Will Gym (ainda). A pessoa precisa abrir o app logada ao menos uma vez.', 6000); return false; }
     const t = snap.data(), amP = _isPersonal();
     const P = amP ? me : { uid: t.uid, name: t.name, email: t.email }, S = amP ? { uid: t.uid, name: t.name, email: t.email } : me;
     const id = P.uid + '_' + S.uid;
-    const ex = await FB.getDoc(FB.docRef('links', id));
-    if (ex.exists()) {
-      const d = ex.data();
+    // v47: check for an existing link with a LIST query. A plain get() of a document that does not exist yet is
+    // denied by the security rules (they read resource.data), which made every first invite fail.
+    step = 'vínculos';
+    if (!(await refreshLinks(false))) return false;
+    const d = _links.find(l => l.id === id);
+    if (d) {
       if (d.status === 'accepted') { showToast('Vocês já estão conectados'); return false; }
       if (d.status === 'pending') { showToast(d.requestedBy === (amP ? 'personal' : 'student') ? 'Solicitação já enviada — aguarde o aceite' : 'Essa pessoa já te enviou uma solicitação — aceite na lista', 5000); return false; }
     }
+    step = 'criar convite';
     await FB.setDoc(FB.docRef('links', id), { personalUid: P.uid, personalName: P.name, personalEmail: P.email, studentUid: S.uid, studentName: S.name, studentEmail: S.email, status: 'pending', requestedBy: amP ? 'personal' : 'student', createdAt: FB.serverTimestamp(), updatedAt: FB.serverTimestamp() });
     await refreshLinks(true); showToast('📨 Solicitação enviada para ' + (t.name || email)); return true;
-  } catch (e) { showToast(_explainErr(e), 6000); return false; }
+  } catch (e) { showToast(_explainErr(e) + ' [etapa: ' + step + ']', 7000); return false; }
 }
 async function setLinkStatus(id, status) {
   try {
@@ -3985,10 +3996,11 @@ function renderLinksModal() {
     ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
     ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
     ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
-    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v47</div>`;
 }
 async function ptSendFromInput() {
   const inp = _pt$('ptLinkEmail'); if (!inp) return;
+  inp.value = _ptFixEmail(inp.value);
   if (await sendLinkRequest(inp.value)) { inp.value = ''; renderLinksModal(); }
 }
 
