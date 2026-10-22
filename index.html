@@ -2491,10 +2491,12 @@ select.form-input option { background: var(--card2); color: var(--text); }
     <button class="btn btn-primary" style="margin-top:10px;" onclick="startSuggestedWorkout()">▶ Iniciar Treino Sugerido</button>
   </div>
 
+  <div id="linkedStudentCard"></div>
+  <div id="trainerPlansCard"></div>
+
   <div class="card" id="quickTemplatesCard" style="margin-bottom:10px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-      <div id="trainerPlansCard"></div>
-  <div class="card-title" style="margin-bottom:0;">⚡ Templates Rápidos</div>
+      <div class="card-title" style="margin-bottom:0;">⚡ Templates Rápidos</div>
       <button onclick="openTemplateModal(null)" style="background:var(--primary);border:none;color:white;border-radius:8px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:var(--font-body);">+ Novo</button>
     </div>
     <div id="templateGrid" class="template-grid"></div>
@@ -2964,7 +2966,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
     </div>
     <div class="settings-item" onclick="openLinksModal()">
-      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v49</div></div></div>
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v50</div></div></div>
       <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
     </div>
   </div>
@@ -3895,7 +3897,9 @@ async function refreshLinks(quiet) {
     const me = _fbUser.uid;
     const [a, b] = await Promise.all([FB.queryDocs(['links'], 'personalUid', me), FB.queryDocs(['links'], 'studentUid', me)]);
     const m = new Map(); [...a, ...b].forEach(x => m.set(x.id, { id: x.id, ...x.data }));
-    _links = [...m.values()]; _linksLoaded = true; updatePendingBadge(); return true;
+    _links = [...m.values()]; _linksLoaded = true; updatePendingBadge();
+    try { renderDashUserPills(); renderSoloUserPills(); } catch (e) {}   // linked students appear in Dashboard / Treino as soon as the links load
+    return true;
   } catch (e) { const msg = _explainErr(e); if (!quiet) showToast(msg, 6000); return false; }
 }
 async function refreshPlans() {
@@ -3904,6 +3908,7 @@ async function refreshPlans() {
     const me = _fbUser.uid;
     const [a, b] = await Promise.all([FB.queryDocs(['plans'], 'studentUid', me), FB.queryDocs(['plans'], 'personalUid', me)]);
     _plansAsStudent = a.map(x => ({ id: x.id, ...x.data })); _plansAsPersonal = b.map(x => ({ id: x.id, ...x.data }));
+    try { renderLinkedStudentCard(); } catch (e) {}
     return true;
   } catch (e) { _explainErr(e); return false; }
 }
@@ -4010,7 +4015,7 @@ function renderLinksModal() {
     ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
     ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
     ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
-    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v49</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v50</div>`;
 }
 async function ptSendFromInput() {
   const inp = _pt$('ptLinkEmail'); if (!inp) return;
@@ -4485,6 +4490,53 @@ function ptNotifyWorkoutDone(targets, trainStart) {
   });
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && _fbOk()) { refreshNotifs(true); } });
+
+// ═══ v50 — linked students in Dashboard and Treino ═══
+function ptMyStudentsList() { return _fbOk() ? _links.filter(l => l.status === 'accepted' && l.personalUid === _fbUser.uid) : []; }
+let _lhBusy = false;
+async function ptEnsureLinkedHist() {
+  if (_lhBusy || !_fbOk()) return;
+  const miss = ptMyStudentsList().filter(l => !_linkedHist[l.studentUid]);
+  if (!miss.length) return;
+  _lhBusy = true;
+  try { await Promise.all(miss.map(l => fetchLinkedHistory(l.studentUid))); } finally { _lhBusy = false; }
+  try { renderDashUserPills(); if (state.dashLinked) renderDashboard(); renderLinkedStudentCard(); renderPersonalList(); } catch (e) {}
+}
+function selectDashLinked(uid) {
+  state.dashLinked = state.dashLinked === uid ? null : uid; state.dashUserId = null;
+  renderDashUserPills(); renderDashboard();
+}
+function ptViewEvolution(uid) { state.dashLinked = uid; state.dashUserId = null; goPage('dashboard'); renderDashUserPills(); renderDashboard(); }
+function renderSoloUserPills() {
+  _renderSoloUserPillsBase();
+  const el = document.getElementById('soloUserPills'); if (!el) return;
+  const linked = ptMyStudentsList();
+  if (state.treinoLinked && !linked.find(l => l.studentUid === state.treinoLinked)) state.treinoLinked = null;
+  if (!linked.length) { renderLinkedStudentCard(); return; }
+  if (state.treinoLinked) el.querySelectorAll('.user-pill.selected').forEach(p => p.classList.remove('selected'));
+  el.insertAdjacentHTML('beforeend', linked.map(l => `<div class="user-pill ${state.treinoLinked === l.studentUid ? 'selected' : ''}" onclick="selectTreinoLinked('${l.studentUid}')"><span class="up-avatar">🔗</span>${_ptEsc(l.studentName || l.studentEmail)}</div>`).join(''));
+  renderLinkedStudentCard();
+}
+function selectTreinoLinked(uid) {
+  state.treinoLinked = state.treinoLinked === uid ? null : uid;
+  renderSoloUserPills();
+  const l = state.treinoLinked && ptMyStudentsList().find(x => x.studentUid === uid);
+  if (l) { showToast('🔗 ' + (l.studentName || l.studentEmail) + ' selecionado — monte o treino abaixo'); ptEnsureLinkedHist(); }
+}
+function renderLinkedStudentCard() {
+  const el = _pt$('linkedStudentCard'); if (!el) return;
+  const uid = state.treinoLinked, l = uid && ptMyStudentsList().find(x => x.studentUid === uid);
+  if (!l) { el.innerHTML = ''; return; }
+  const st = _studentList().find(s => s.key === 'R:' + uid); if (!st) { el.innerHTML = ''; return; }
+  const t = st.stats, plans = _plansAsPersonal.filter(p => p.studentUid === uid).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const sb = 'padding:7px 11px;font-size:12px;';
+  el.innerHTML = `<div style="${_ptCard}padding:14px;margin-bottom:14px;border-color:#3b82f6;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><div><div style="font-family:var(--font-display);font-size:18px;font-weight:800;">🔗 ${_ptEsc(st.name)}</div><div style="font-size:12px;color:var(--muted);">Conta vinculada — o aluno treina pelo próprio app</div></div>
+      <span style="flex:none;font-size:11px;font-weight:800;color:${t.att.color};border:1.5px solid ${t.att.color};border-radius:12px;padding:3px 9px;">${t.att.label}</span></div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px;"><span>${st.loading ? 'carregando…' : 'Último treino: ' + _ptAgo(t.last)}</span><span>📅 ${t.s7} treino(s)/7d</span><span>📈 ${t.perWeek.toFixed(1)}/sem (meta ${t.goal})</span>${t.trend !== null ? `<span style="color:${t.trend >= 0 ? '#22c55e' : '#ef4444'};">${t.trend >= 0 ? '▲' : '▼'} ${Math.abs(t.trend)}% vol.</span>` : ''}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;"><button style="${_ptBtnP}${sb}" onclick="openPlanBuilder('R:${uid}')">🏅 Montar treino</button><button style="${_ptBtn}${sb}" onclick="ptViewEvolution('${uid}')">📈 Ver evolução</button><button style="${_ptBtn}${sb}" onclick="openStudentModal('R:${uid}')">👤 Detalhes e avaliação</button><button style="${_ptBtn}${sb}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button></div>
+    ${plans.length ? `<div style="margin-top:12px;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:800;">Treinos enviados</div>` + plans.map(p => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--border);"><div><div style="font-weight:700;">${_ptEsc(p.title)}</div><div style="font-size:12px;color:var(--muted);">${p.days.length} dia(s) · ${p.days.reduce((a, d) => a + d.exs.length, 0)} exercícios</div></div><button style="${_ptBtn}${sb}" onclick="openPlanBuilder('R:${uid}','${p.id}')">Editar</button></div>`).join('') : '<div style="font-size:13px;color:var(--muted);margin-top:10px;">Nenhum treino enviado ainda. O treino montado aparece no app do aluno como “Treino montado pelo personal”.</div>'}</div>`;
+}
 
 function syncStopButtons() {
   const on = !!state.activeTraining;
@@ -5745,6 +5797,7 @@ function getAccountAsAthlete() {
 }
 
 function ensureAthleteSelected() {
+  if (state.treinoLinked) { showToast('🔗 Aluno vinculado selecionado — ele treina pelo próprio app. Selecione um atleta seu para treinar aqui.', 5000); return false; }
   // Called before starting any training — ensures at least 1 athlete is selected
   const active = getActiveUsers();
   if (!active.length) return true; // no athletes registered, allow anyway
@@ -5872,7 +5925,7 @@ function getActiveUsers() {
   return users.filter(u => u !== null && u !== undefined);
 }
 
-function renderSoloUserPills() {
+function _renderSoloUserPillsBase() {
   const el = document.getElementById('soloUserPills'); if (!el) return;
   const active = getActiveUsers();
   if (!active.length) {
@@ -5941,19 +5994,30 @@ function renderGroupUserPills() {
 
 function renderDashUserPills() {
   const el = document.getElementById('dashUserPills'); if (!el) return;
-  const active = getActiveUsers();
+  const active = getActiveUsers(), linked = ptMyStudentsList();
+  if (state.dashLinked && !linked.find(l => l.studentUid === state.dashLinked)) state.dashLinked = null;   // link removed
   const box = document.getElementById('dashUserSearch');
-  const many = active.length > 6;                       // v45: search appears when there are many profiles
+  const many = active.length + linked.length > 6;       // search appears when there are many profiles
   if (box) { box.style.display = many ? 'block' : 'none'; if (!many) { box.value = ''; state.dashSearch = ''; } }
   const q = many ? _ptNorm(state.dashSearch || '') : '';
-  const shown = active.filter(u => !q || _ptNorm(u.name).includes(q) || state.dashUserId === u.id);
-  let html = `<div class="user-pill ${state.dashUserId===null?'selected':''}" onclick="selectDashUser(null)"><span class="up-avatar">👥</span>Todos</div>`;
-  html += shown.map(u => `<div class="user-pill ${state.dashUserId===u.id?'selected':''}" onclick="selectDashUser('${u.id}')"><span class="up-avatar">${u.avatar}</span>${_ptEsc(u.name)}</div>`).join('');
-  if (q) html += `<div style="width:100%;font-size:12px;color:var(--muted);padding:2px 4px;">${shown.length ? shown.length + ' de ' + active.length + ' alunos' : 'Nenhum aluno encontrado'}</div>`;
+  const shown = active.filter(u => !q || _ptNorm(u.name).includes(q) || (state.dashUserId === u.id && !state.dashLinked));
+  const shownL = linked.filter(l => !q || _ptNorm(l.studentName || l.studentEmail).includes(q) || state.dashLinked === l.studentUid);
+  let html = `<div class="user-pill ${state.dashUserId===null&&!state.dashLinked?'selected':''}" onclick="selectDashUser(null)"><span class="up-avatar">👥</span>Todos</div>`;
+  html += shown.map(u => `<div class="user-pill ${state.dashUserId===u.id&&!state.dashLinked?'selected':''}" onclick="selectDashUser('${u.id}')"><span class="up-avatar">${u.avatar}</span>${_ptEsc(u.name)}</div>`).join('');
+  html += shownL.map(l => `<div class="user-pill ${state.dashLinked===l.studentUid?'selected':''}" onclick="selectDashLinked('${l.studentUid}')"><span class="up-avatar">🔗</span>${_ptEsc(l.studentName || l.studentEmail)}</div>`).join('');
+  if (q) html += `<div style="width:100%;font-size:12px;color:var(--muted);padding:2px 4px;">${shown.length + shownL.length ? (shown.length + shownL.length) + ' de ' + (active.length + linked.length) + ' alunos' : 'Nenhum aluno encontrado'}</div>`;
+  if (state.dashLinked) {
+    const l = linked.find(x => x.studentUid === state.dashLinked), loading = !_linkedHist[state.dashLinked];
+    html += `<div style="width:100%;margin-top:8px;padding:10px 12px;border:1px solid #3b82f6;border-radius:12px;background:rgba(59,130,246,.10);">
+      <div style="font-size:13px;font-weight:700;">🔗 Dados da conta de ${_ptEsc(l.studentName || l.studentEmail)} <span style="font-weight:500;color:var(--muted);">— somente leitura${loading ? ' · carregando…' : ''}</span></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><button style="${_ptBtnP}padding:6px 10px;font-size:12px;" onclick="openPlanBuilder('R:${l.studentUid}')">🏅 Montar treino</button><button style="${_ptBtn}padding:6px 10px;font-size:12px;" onclick="openStudentModal('R:${l.studentUid}')">👤 Detalhes e avaliação</button><button style="${_ptBtn}padding:6px 10px;font-size:12px;" onclick="openChat('${l.id}')">💬 Recados${_unreadBadge(ptUnreadMsgs(l.id))}</button></div></div>`;
+  }
   el.innerHTML = html;
+  ptEnsureLinkedHist();
 }
 
 function selectSoloUser(id) {
+  state.treinoLinked = null;
   state.activeUserId = state.activeUserId===id ? null : id;
   renderSoloUserPills();
   const u = getActiveUsers().find(u=>u.id===id);
@@ -5988,7 +6052,7 @@ function toggleGroupUser(id) {
   const count = state.groupUserIds.length;
   showToast(count > 0 ? `👥 ${count} atleta${count>1?'s':''} no grupo` : 'Grupo vazio');
 }
-function selectDashUser(id) { state.dashUserId=id; renderDashUserPills(); renderDashboard(); }
+function selectDashUser(id) { state.dashLinked = null; state.dashUserId=id; renderDashUserPills(); renderDashboard(); }
 
 // ═══════════════════════════════════════════════════════
 // NAVIGATION
@@ -6012,7 +6076,7 @@ function goPage(p, tabEl) {
   try {
     applyPersonalMode();
     if (p === 'personal') { renderPersonalPage(); ptRefreshAll(false); const nt = _pt$('navPersonal'); if (nt && nt.scrollIntoView) nt.scrollIntoView({ inline: 'center', block: 'nearest' }); }
-    if (p === 'treino') { renderTrainerPlans(true); refreshPlans().then(() => renderTrainerPlans(true)); }
+    if (p === 'treino') { renderTrainerPlans(true); renderLinkedStudentCard(); refreshPlans().then(() => { renderTrainerPlans(true); renderLinkedStudentCard(); }); ptEnsureLinkedHist(); }
   } catch(e) { console.warn('[WGym] personal hooks', e); }
   if (p === 'treino' && !window._lastModeApplied) {
     window._lastModeApplied = true;
@@ -6203,6 +6267,7 @@ function deleteGroup(id, e) {
 // EXERCISE BOTTOM SHEET
 // ═══════════════════════════════════════════════════════
 function openExSheet(groupName) {
+  if (state.treinoLinked) { showToast('🔗 Aluno vinculado: ele treina pelo próprio app. Toque em “Montar treino” para enviar o treino a ele.', 5000); return; }
   const groups = getAllGroups();
   const g = groups.find(x => x.name === groupName);
   document.getElementById('sheetGroupIcon').textContent = g ? g.icon : '💪';
@@ -9709,7 +9774,16 @@ function clearHistory() {
 // ═══════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════
+// v50: when a linked student is selected the dashboard is drawn from THAT account's history (read-only).
+// The personal's own history is swapped out only for the duration of the synchronous render and always restored.
 function renderDashboard() {
+  const uid = state.dashLinked;
+  if (!uid) return _renderDashboardBase();
+  const orig = history, ouid = state.dashUserId;
+  history = _linkedHist[uid] || []; state.dashUserId = null;
+  try { _renderDashboardBase(); } finally { history = orig; state.dashUserId = ouid; }
+}
+function _renderDashboardBase() {
   renderDashUserPills();
   renderDashboardQuickCards();
   renderWeekGoalBar();
