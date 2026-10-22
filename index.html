@@ -2964,7 +2964,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
     </div>
     <div class="settings-item" onclick="openLinksModal()">
-      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v48</div></div></div>
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v49</div></div></div>
       <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
     </div>
   </div>
@@ -4008,9 +4008,9 @@ function renderLinksModal() {
     <div style="display:flex;gap:8px;"><input id="ptLinkEmail" class="form-input" type="email" placeholder="${amP ? 'e-mail do aluno' : 'e-mail do personal'}" style="flex:1;" onkeydown="if(event.key==='Enter')ptSendFromInput()"><button style="${_ptBtnP}" onclick="ptSendFromInput()">Enviar</button></div>
     ${sec('Solicitações recebidas', inc.map(l => row(l, `<button style="${_ptBtnP}" onclick="setLinkStatus('${l.id}','accepted')">Aceitar</button><button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Recusar</button>`)).join(''))}
     ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
-    ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
+    ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
     ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
-    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v48</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v49</div>`;
 }
 async function ptSendFromInput() {
   const inp = _pt$('ptLinkEmail'); if (!inp) return;
@@ -4020,25 +4020,61 @@ async function ptSendFromInput() {
 
 // ── Recados (chat) ──
 let _chat = null;
+function ptUnreadMsgs(linkId) { return _notifs.filter(n => n.type === 'message' && !n.read && n.linkId === linkId).length; }
+function _unreadBadge(n) { return n ? `<span style="background:#ef4444;color:#fff;border-radius:9px;padding:1px 6px;font-size:10px;font-weight:800;margin-left:4px;">${n > 9 ? '9+' : n}</span>` : ''; }
+function _refreshMsgBadges() {
+  try { if (_pt$('ptLinksBody')) { const v = (_pt$('ptLinkEmail') || {}).value; renderLinksModal(); if (v && _pt$('ptLinkEmail')) _pt$('ptLinkEmail').value = v; } } catch (e) {}
+  try { if (_pt$('ptList')) renderPersonalList(); } catch (e) {}
+  try { renderTrainerPlans(true); } catch (e) {}
+}
+async function ptMarkChatRead(linkId) {
+  const u = _notifs.filter(n => n.type === 'message' && !n.read && n.linkId === linkId);
+  if (!u.length) return;
+  u.forEach(n => n.read = true); renderBell(); _refreshMsgBadges(); if (_pt$('notifPanel')) renderNotifPanel();
+  await Promise.all(u.map(n => FB.setDoc(FB.docRef('notifications', n.id), { read: true }, { merge: true }).catch(() => {})));
+}
 async function openChat(linkId) {
   const l = _links.find(x => x.id === linkId); if (!l) return;
   const o = _myRole(l) === 'personal' ? l.studentName : l.personalName;
-  _ptOverlay('ptChat', `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><div style="font-family:var(--font-display);font-size:18px;font-weight:800;">💬 ${_ptEsc(o || 'Recados')}</div><button style="${_ptBtn}" onclick="_ptClose('ptChat')">✕</button></div><div id="ptChatMsgs" style="height:46vh;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding:4px;"></div><div style="display:flex;gap:8px;margin-top:10px;"><input id="ptChatInput" class="form-input" placeholder="Escreva um recado..." style="flex:1;" onkeydown="if(event.key==='Enter')ptChatSend()"><button style="${_ptBtnP}" onclick="ptChatSend()">Enviar</button></div>`, 480, 10003);
-  _chat = { linkId }; await ptChatLoad();
+  _ptOverlay('ptChat', `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><div style="font-family:var(--font-display);font-size:18px;font-weight:800;">💬 ${_ptEsc(o || 'Recados')}</div><button style="${_ptBtn}" onclick="_ptClose('ptChat')">✕</button></div>
+    <div style="position:relative;"><div id="ptChatMsgs" style="height:46vh;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding:4px;"></div>
+      <button id="ptChatPill" onclick="ptChatToBottom()" style="display:none;position:absolute;left:50%;transform:translateX(-50%);bottom:8px;background:var(--primary);color:#fff;border:none;border-radius:16px;padding:7px 14px;font-size:12px;font-weight:800;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.5);"></button></div>
+    <div style="display:flex;gap:8px;margin-top:10px;"><input id="ptChatInput" class="form-input" placeholder="Escreva um recado..." style="flex:1;" onkeydown="if(event.key==='Enter')ptChatSend()"><button style="${_ptBtnP}" onclick="ptChatSend()">Enviar</button></div>`, 480, 10003);
+  _chat = { linkId, lastRead: +localStorage.getItem('wgym_chat_read_' + linkId) || 0, loaded: false, otherCount: 0, unseen: 0 };
+  _pt$('ptChatMsgs').onscroll = ptChatOnScroll;
+  await ptChatLoad();
   clearInterval(window._chatT); window._chatT = setInterval(() => { if (!_pt$('ptChat')) { clearInterval(window._chatT); return; } ptChatLoad(); }, 7000);
 }
+function ptChatOnScroll() {
+  const box = _pt$('ptChatMsgs'); if (!box || !_chat) return;
+  if (box.scrollTop + box.clientHeight >= box.scrollHeight - 30) { _chat.unseen = 0; const pl = _pt$('ptChatPill'); if (pl) pl.style.display = 'none'; }
+}
+function ptChatToBottom() { const box = _pt$('ptChatMsgs'); if (box) { box.scrollTop = box.scrollHeight; ptChatOnScroll(); } }
 async function ptChatLoad() {
   if (!_chat || !_pt$('ptChatMsgs')) return;
   try {
+    const me = _fbUser.uid;
     const msgs = (await FB.listDocs('links', _chat.linkId, 'messages')).map(x => x.data).sort((a, b) => (a.ts || 0) - (b.ts || 0));
-    const box = _pt$('ptChatMsgs'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
-    box.innerHTML = msgs.length ? msgs.map(m => { const mine = m.from === _fbUser.uid; return `<div style="align-self:${mine ? 'flex-end' : 'flex-start'};max-width:80%;background:${mine ? 'var(--primary)' : 'var(--bg2)'};color:${mine ? '#fff' : 'var(--text)'};padding:8px 12px;border-radius:14px;font-size:14px;white-space:pre-wrap;">${_ptEsc(m.text)}<div style="font-size:10px;opacity:.7;margin-top:2px;">${mine ? 'você' : _ptEsc(m.name || '')} · ${new Date(m.ts).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div></div>`; }).join('') : '<div style="color:var(--muted);text-align:center;margin:auto;font-size:13px;">Nenhum recado ainda.</div>';
-    if (atEnd) box.scrollTop = box.scrollHeight;
+    const box = _pt$('ptChatMsgs'), atEnd = _chat.forceBottom || !_chat.loaded || box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    const firstNew = msgs.findIndex(m => m.from !== me && (m.ts || 0) > _chat.lastRead);   // everything from the other person since the last time this chat was seen
+    const divider = '<div style="display:flex;align-items:center;gap:8px;color:var(--primary);font-size:11px;font-weight:800;text-transform:uppercase;margin:6px 0;"><span style="flex:1;height:1px;background:var(--primary);opacity:.5;"></span>Novas mensagens<span style="flex:1;height:1px;background:var(--primary);opacity:.5;"></span></div>';
+    box.innerHTML = msgs.length ? msgs.map((m, i) => { const mine = m.from === me; return (i === firstNew ? divider : '') + `<div style="align-self:${mine ? 'flex-end' : 'flex-start'};max-width:80%;background:${mine ? 'var(--primary)' : 'var(--bg2)'};color:${mine ? '#fff' : 'var(--text)'};padding:8px 12px;border-radius:14px;font-size:14px;white-space:pre-wrap;">${_ptEsc(m.text)}<div style="font-size:10px;opacity:.7;margin-top:2px;">${mine ? 'você' : _ptEsc(m.name || '')} · ${new Date(m.ts).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div></div>`; }).join('') : '<div style="color:var(--muted);text-align:center;margin:auto;font-size:13px;">Nenhum recado ainda.</div>';
+    const otherCount = msgs.filter(m => m.from !== me).length, gained = _chat.loaded ? otherCount - _chat.otherCount : 0;
+    _chat.otherCount = otherCount;
+    if (atEnd) { box.scrollTop = box.scrollHeight; _chat.unseen = 0; const pl = _pt$('ptChatPill'); if (pl) pl.style.display = 'none'; }
+    else if (gained > 0) {                                       // small "new messages" notice while reading older ones
+      _chat.unseen = (_chat.unseen || 0) + gained; const pl = _pt$('ptChatPill');
+      if (pl) { pl.textContent = '⬇ ' + _chat.unseen + (_chat.unseen > 1 ? ' novas mensagens' : ' nova mensagem'); pl.style.display = 'block'; }
+    }
+    if (gained > 0) { try { if (settings.vibration && navigator.vibrate) navigator.vibrate(60); } catch (e) {} }
+    _chat.loaded = true; _chat.forceBottom = false;
+    const latest = Math.max(0, ...msgs.filter(m => m.from !== me).map(m => m.ts || 0));   // the chat is on screen → these are seen
+    if (latest && !document.hidden) { try { localStorage.setItem('wgym_chat_read_' + _chat.linkId, latest); } catch (e) {} ptMarkChatRead(_chat.linkId); }
   } catch (e) { showToast(_explainErr(e), 5000); }
 }
 async function ptChatSend() {
   const inp = _pt$('ptChatInput'); if (!inp || !_chat) return;
-  const text = inp.value.trim(); if (!text) return; inp.value = '';
+  const text = inp.value.trim(); if (!text) return; inp.value = ''; _chat.forceBottom = true;
   try { const me = _me(); await FB.setDoc(FB.docRef('links', _chat.linkId, 'messages', 'm' + Date.now()), { from: me.uid, name: me.name, text, ts: Date.now() }); const _l = _links.find(x => x.id === _chat.linkId); if (_l) ptNotify(_l.personalUid === me.uid ? _l.studentUid : _l.personalUid, 'message', 'Novo recado de ' + me.name, text, { linkId: _chat.linkId }); await ptChatLoad(); }
   catch (e) { showToast(_explainErr(e), 5000); inp.value = text; }
 }
@@ -4114,7 +4150,7 @@ function renderPersonalList() {
   list.innerHTML = rows.length ? rows.map(s => { const t = s.stats; return `
     <div onclick="openStudentModal('${s.key}')" style="${_ptCard}padding:12px 14px;margin-bottom:8px;cursor:pointer;border-left:4px solid ${t.att.color};">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-        <div style="display:flex;align-items:center;gap:10px;min-width:0;"><span style="font-size:24px;">${s.avatar}</span><div style="min-width:0;"><div style="font-weight:800;">${_ptEsc(s.name)}${s.kind === 'linked' ? ' <span style="font-size:10px;color:var(--muted);font-weight:700;">· conta vinculada</span>' : ''}</div><div style="font-size:12px;color:var(--muted);">${s.loading ? 'carregando…' : 'Último treino: ' + _ptAgo(t.last)}</div></div></div>
+        <div style="display:flex;align-items:center;gap:10px;min-width:0;"><span style="font-size:24px;">${s.avatar}</span><div style="min-width:0;"><div style="font-weight:800;">${_ptEsc(s.name)}${s.kind === 'linked' ? ' <span style="font-size:10px;color:var(--muted);font-weight:700;">· conta vinculada</span>' : ''}${s.kind === 'linked' ? _unreadBadge(ptUnreadMsgs(s.linkId)) : ''}</div><div style="font-size:12px;color:var(--muted);">${s.loading ? 'carregando…' : 'Último treino: ' + _ptAgo(t.last)}</div></div></div>
         <span style="flex:none;font-size:11px;font-weight:800;color:${t.att.color};border:1.5px solid ${t.att.color};border-radius:12px;padding:3px 9px;">${t.att.label}</span>
       </div>
       <div style="display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:8px;"><span>📅 ${t.s7} treino${t.s7 === 1 ? '' : 's'}/7d</span><span>📈 ${t.perWeek.toFixed(1)}/sem (meta ${t.goal})</span>${t.trend !== null ? `<span style="color:${t.trend >= 0 ? '#22c55e' : '#ef4444'};">${t.trend >= 0 ? '▲' : '▼'} ${Math.abs(t.trend)}% vol.</span>` : ''}${t.prs.length ? `<span>🏆 ${t.prs.length} PR</span>` : ''}</div>
@@ -4172,7 +4208,7 @@ function renderStudent(key) {
     <div style="display:flex;gap:6px;margin-top:6px;"><input id="asObs" class="form-input" placeholder="Observações da avaliação" style="flex:1;"><button style="${_ptBtnP}" onclick="ptSaveAssess('${key}')">Salvar</button></div>${asRows}
     ${h3('Anotações privadas (só você vê)')}<textarea class="form-input" rows="3" placeholder="Objetivos, lesões, observações..." onblur="ptSaveNote('${key}',this.value)" style="width:100%;">${_ptEsc(td.notes[key] || '')}</textarea>
     ${h3('Treinos montados por você')}${plans || '<div style="font-size:13px;color:var(--muted);">Nenhum treino montado ainda.</div>'}
-    <div style="display:flex;gap:8px;margin-top:12px;"><button style="${_ptBtnP}flex:1;" onclick="openPlanBuilder('${key}')">➕ Montar treino</button>${st.kind === 'linked' ? `<button style="${_ptBtn}" onclick="openChat('${st.linkId}')">💬 Recados</button>` : ''}</div>`;
+    <div style="display:flex;gap:8px;margin-top:12px;"><button style="${_ptBtnP}flex:1;" onclick="openPlanBuilder('${key}')">➕ Montar treino</button>${st.kind === 'linked' ? `<button style="${_ptBtn}" onclick="openChat('${st.linkId}')">💬 Recados${_unreadBadge(ptUnreadMsgs(st.linkId))}</button>` : ''}</div>`;
 }
 function ptSaveAssess(key) {
   const v = id => (_pt$(id) || {}).value || '';
@@ -4272,7 +4308,7 @@ function renderTrainerPlans(force) {
   _planIndex = {}; plans.forEach(p => _planIndex[p.id] = p);
   if (!plans.length && !mine.length) { el.innerHTML = ''; return; }
   const sb = 'padding:6px 10px;font-size:12px;';
-  const req = mine.map(l => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px;"><span style="font-size:12px;color:var(--muted);">Personal <b>${_ptEsc(l.personalName)}</b>:</span><button style="${_ptBtn}${sb}" onclick="ptRequestPlan('${l.id}','new')">🆕 Pedir treino novo</button><button style="${_ptBtn}${sb}" onclick="ptRequestPlan('${l.id}','update')">🔄 Pedir atualização</button><button style="${_ptBtn}${sb}" onclick="openChat('${l.id}')">💬</button></div>`).join('');
+  const req = mine.map(l => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px;"><span style="font-size:12px;color:var(--muted);">Personal <b>${_ptEsc(l.personalName)}</b>:</span><button style="${_ptBtn}${sb}" onclick="ptRequestPlan('${l.id}','new')">🆕 Pedir treino novo</button><button style="${_ptBtn}${sb}" onclick="ptRequestPlan('${l.id}','update')">🔄 Pedir atualização</button><button style="${_ptBtn}${sb}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button></div>`).join('');
   el.innerHTML = `<div style="${_ptCard}padding:14px;margin-bottom:14px;border-color:var(--primary);">
     <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--primary);font-weight:800;margin-bottom:8px;">🏅 Treinos montados pelo personal</div>
     ${plans.length ? plans.map(p => `<div style="padding:8px 0;border-top:1px solid var(--border);"><div style="font-weight:800;">${_ptEsc(p.title)}</div><div style="font-size:12px;color:var(--muted);">Treino montado pelo personal <b>${_ptEsc(p.personalName)}</b></div>${p.note ? `<div style="font-size:12px;margin:4px 0;font-style:italic;">“${_ptEsc(p.note)}”</div>` : ''}<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">${p.days.map((d, i) => `<button style="${_ptBtnP}padding:7px 12px;" onclick="startPersonalPlan('${p.id}',${i})">▶ ${_ptEsc(d.name)} (${d.exs.length})</button>`).join('')}</div></div>`).join('') : '<div style="font-size:13px;color:var(--muted);padding:4px 0;">Seu personal ainda não montou um treino para você.</div>'}
@@ -4351,11 +4387,18 @@ async function refreshNotifs(quiet) {
     list.forEach(n => seen.add(n.id)); _saveSeen(seen);
     const first = !_notifLoaded; _notifs = list; _notifErr = null; _notifLoaded = true;
     renderBell(); if (_pt$('notifPanel')) renderNotifPanel();
+    const msig = _notifs.filter(n => n.type === 'message' && !n.read).map(n => n.linkId).sort().join(',');
+    if (msig !== window._msgSig) { window._msgSig = msig; _refreshMsgBadges(); }
     if (fresh.length) _notifAlert(fresh, first);
     return true;
   } catch (e) { _notifErr = e; renderBell(); if (!quiet) showToast(_explainErr(e), 5000); return false; }
 }
 function _notifAlert(fresh, first) {
+  if (_chat && _pt$('ptChat')) {                       // the conversation is on screen: the chat itself shows the new message
+    const open = fresh.filter(n => n.type === 'message' && n.linkId === _chat.linkId);
+    if (open.length) { ptMarkChatRead(_chat.linkId); ptChatLoad(); fresh = fresh.filter(n => !open.includes(n)); }
+    if (!fresh.length) return;
+  }
   if (first) showToast('🔔 Você tem ' + fresh.length + (fresh.length > 1 ? ' notificações novas' : ' notificação nova'), 5000);
   else fresh.slice(0, 3).forEach((n, i) => setTimeout(() => showToast((_NOTIF_ICON[n.type] || '🔔') + ' ' + n.title + (n.body ? ' — ' + n.body : ''), 5000), i * 1200));
   try { if (settings.vibration && navigator.vibrate) navigator.vibrate(first ? [120] : [120, 80, 120]); } catch (e) {}
