@@ -2966,7 +2966,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
     </div>
     <div class="settings-item" onclick="openLinksModal()">
-      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v50</div></div></div>
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v51</div></div></div>
       <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
     </div>
   </div>
@@ -4015,7 +4015,7 @@ function renderLinksModal() {
     ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
     ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
     ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
-    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v50</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v51</div>`;
 }
 async function ptSendFromInput() {
   const inp = _pt$('ptLinkEmail'); if (!inp) return;
@@ -4086,13 +4086,13 @@ async function ptChatSend() {
 
 // ═══ Monitoring ═══
 function _studentList() {
-  const list = getActiveUsers().map(u => ({ key: 'L:' + u.id, kind: 'local', id: u.id, name: u.name, avatar: u.avatar }));
+  const list = getActiveUsers().filter(u => !u.linkedUid).map(u => ({ key: 'L:' + u.id, kind: 'local', id: u.id, name: u.name, avatar: u.avatar }));
   if (_fbOk()) _links.filter(l => l.status === 'accepted' && l.personalUid === _fbUser.uid)
     .forEach(l => list.push({ key: 'R:' + l.studentUid, kind: 'linked', uid: l.studentUid, linkId: l.id, name: l.studentName || l.studentEmail, avatar: '🔗', email: l.studentEmail }));
   return list.map(st => { st.entries = _studentEntries(st); st.loading = st.kind === 'linked' && !_linkedHist[st.uid]; st.stats = computeStudentStats(st, st.entries); return st; });
 }
 function _studentEntries(st) {
-  return st.kind === 'local' ? history.filter(h => h.userId === st.id || h.userId2 === st.id || (h.groupUserIds || []).includes(st.id)) : (_linkedHist[st.uid] || []);
+  return st.kind === 'local' ? history.filter(h => h.userId === st.id || h.userId2 === st.id || (h.groupUserIds || []).includes(st.id)) : _linkedEntriesFor(st.uid, history);
 }
 const _ptN = x => +x || 0;
 const _ptE1 = (l, r) => (l > 0 && r > 0) ? l * (1 + r / 30) : 0;
@@ -4302,27 +4302,71 @@ function _visiblePlans() {
   }
   const uid = state.activeUserId || state.activeP1Id;
   if (uid) (trainerData().localPlans[uid] || []).forEach(p => out.push(p));
+  const lk = ptTreinoLinkedUid();
+  if (lk && _fbOk()) _plansAsPersonal.filter(p => p.studentUid === lk).forEach(p => out.push(p));
   return out;
 }
 function ptMyPersonals() { return _fbOk() ? _links.filter(l => l.status === 'accepted' && l.studentUid === _fbUser.uid) : []; }
+function _ptOwnerKey(p) {   // who may edit this plan from this phone
+  if (_fbOk() && p.personalUid === _fbUser.uid && p.studentUid) return 'R:' + p.studentUid;
+  if (!p.personalUid && _isPersonal() && state.activeUserId) return 'L:' + state.activeUserId;
+  return null;
+}
+// next day of the plan = the one after the last day executed (by anyone: personal on his phone, or the student)
+function _planDayIdx(plan, entries) {
+  const last = (entries || []).filter(h => h && h.planId === plan.id && h.planDay != null).sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+  if (!last) return 0;
+  let li = plan.days.findIndex(d => d.name === last.planDayName); if (li < 0) li = +last.planDay || 0;
+  return (li + 1) % plan.days.length;
+}
+function _planInProgress(plan) {
+  if (!state.activeTraining || !state.planTargets) return null;
+  const names = Object.keys(state.planTargets).filter(n => state.planTargets[n].planId === plan.id); if (!names.length) return null;
+  const done = new Set(history.filter(h => h.trainStart === state.trainStart && h.planId === plan.id).map(h => h.exercise));
+  const pending = names.filter(n => !done.has(n)); if (!pending.length) return null;
+  return { names, done, pending, dayIdx: state.planTargets[names[0]].dayIdx || 0 };
+}
+function _planHero(plan, entries, label) {
+  const prog = _planInProgress(plan), idx = Math.min(prog ? prog.dayIdx : _planDayIdx(plan, entries), plan.days.length - 1), day = plan.days[idx];
+  const line = (e, i) => { const dn = prog && prog.done.has(e.ex); return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:5px 0;border-top:1px solid var(--border);${dn ? 'opacity:.55;' : ''}"><span>${dn ? '✅' : (i + 1) + '.'} <b>${_ptEsc(e.ex)}</b></span><span style="color:var(--muted);white-space:nowrap;">${e.sets}× ${e.reps}${isAerobicExercise(e.ex, e.group) ? 'min' : ''}${e.load > 0 ? ' · ' + e.load + 'kg' : ''}</span></div>`; };
+  const others = plan.days.map((_, i) => i).filter(i => i !== idx), big = `${_ptBtnP}width:100%;padding:14px;font-size:15px;`;
+  return `<div style="padding:2px 0 10px;"><div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--primary);font-weight:800;">${label}</div>
+    <div style="font-family:var(--font-display);font-size:21px;font-weight:800;margin:4px 0 2px;">Treino “${_ptEsc(plan.title)}” <span style="font-size:14px;color:var(--muted);font-weight:700;">· ${_ptEsc(day.name)}</span></div>
+    ${plan.note ? `<div style="font-size:12px;font-style:italic;margin:2px 0 6px;">“${_ptEsc(plan.note)}”</div>` : ''}
+    <div style="margin:8px 0 10px;">${day.exs.map(line).join('')}</div>
+    ${prog ? `<button style="${big}" onclick="ptContinuePlan()">▶ Continuar treino (${prog.done.size}/${prog.names.length})</button>` : `<button style="${big}" onclick="startPersonalPlan('${plan.id}',${idx})">▶ Iniciar ${_ptEsc(day.name)} (${day.exs.length} exercícios)</button>`}
+    ${(!prog && others.length) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center;"><span style="font-size:12px;color:var(--muted);">Fazer outro dia:</span>${others.map(i => `<button style="${_ptBtn}padding:6px 10px;font-size:12px;" onclick="startPersonalPlan('${plan.id}',${i})">${_ptEsc(plan.days[i].name)}</button>`).join('')}</div>` : ''}</div>`;
+}
+function ptContinuePlan() {
+  const names = Object.keys(state.planTargets || {}), done = new Set(history.filter(h => h.trainStart === state.trainStart && h.planId).map(h => h.exercise));
+  const next = names.find(n => !done.has(n)); if (!next) { showToast('✅ Todos os exercícios do treino foram feitos'); return; }
+  state.selectedEx = next; state.currentSeries = []; stopTimer();
+  const ec = _pt$('exerciseCard'); if (ec) ec.style.display = 'block';
+  goPage('exercicio'); prefillLastLoad(next); renderQueueBar();
+}
 function renderTrainerPlans(force) {
   const el = _pt$('trainerPlansCard'); if (!el) return;
-  const plans = _visiblePlans(), mine = ptMyPersonals();
-  const sig = plans.map(p => p.id + ':' + p.updatedAt).join('|') + '#' + (state.activeUserId || '') + '#' + mine.map(l => l.id).join(',');
+  const plans = _visiblePlans().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)), mine = ptMyPersonals();
+  const sig = plans.map(p => p.id + ':' + p.updatedAt).join('|') + '#' + (state.activeUserId || '') + '#' + mine.map(l => l.id).join(',') + '#' + history.filter(h => h.planId).length + '#' + (state.activeTraining ? state.trainStart : '') + Object.keys(state.planTargets || {}).length + '#' + _ptUnreadSig();
   if (!force && sig === _planSig) return; _planSig = sig;
   _planIndex = {}; plans.forEach(p => _planIndex[p.id] = p);
   if (!plans.length && !mine.length) { el.innerHTML = ''; return; }
-  const sb = 'padding:6px 10px;font-size:12px;';
+  const lk = ptTreinoLinkedUid(), lkl = lk && ptMyStudentsList().find(l => l.studentUid === lk);
+  const entries = lk ? _linkedEntriesFor(lk, history) : history;
+  const sb = 'padding:6px 10px;font-size:12px;', first = plans[0];
+  const edit = p => { const k = _ptOwnerKey(p); return k ? `<button style="${_ptBtn}${sb}" onclick="openPlanBuilder('${k}','${p.id}')">✏️ Editar</button>` : ''; };
+  const label = first ? (lkl ? '🏅 Treino de hoje de ' + _ptEsc(lkl.studentName || lkl.studentEmail) + ' · montado por ' + _ptEsc(first.personalName) : '🏅 Treino de hoje · montado pelo personal ' + _ptEsc(first.personalName)) : '';
   const req = mine.map(l => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px;"><span style="font-size:12px;color:var(--muted);">Personal <b>${_ptEsc(l.personalName)}</b>:</span><button style="${_ptBtn}${sb}" onclick="ptRequestPlan('${l.id}','new')">🆕 Pedir treino novo</button><button style="${_ptBtn}${sb}" onclick="ptRequestPlan('${l.id}','update')">🔄 Pedir atualização</button><button style="${_ptBtn}${sb}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button></div>`).join('');
   el.innerHTML = `<div style="${_ptCard}padding:14px;margin-bottom:14px;border-color:var(--primary);">
-    <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--primary);font-weight:800;margin-bottom:8px;">🏅 Treinos montados pelo personal</div>
-    ${plans.length ? plans.map(p => `<div style="padding:8px 0;border-top:1px solid var(--border);"><div style="font-weight:800;">${_ptEsc(p.title)}</div><div style="font-size:12px;color:var(--muted);">Treino montado pelo personal <b>${_ptEsc(p.personalName)}</b></div>${p.note ? `<div style="font-size:12px;margin:4px 0;font-style:italic;">“${_ptEsc(p.note)}”</div>` : ''}<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">${p.days.map((d, i) => `<button style="${_ptBtnP}padding:7px 12px;" onclick="startPersonalPlan('${p.id}',${i})">▶ ${_ptEsc(d.name)} (${d.exs.length})</button>`).join('')}</div></div>`).join('') : '<div style="font-size:13px;color:var(--muted);padding:4px 0;">Seu personal ainda não montou um treino para você.</div>'}
+    ${first ? _planHero(first, entries, label) + `<div style="display:flex;gap:6px;flex-wrap:wrap;">${edit(first)}</div>` : '<div style="font-size:13px;color:var(--muted);padding:4px 0;">Seu personal ainda não montou um treino para você.</div>'}
+    ${plans.length > 1 ? `<div style="margin-top:12px;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:800;">Outros treinos montados</div>` + plans.slice(1).map(p => `<div style="padding:8px 0;border-top:1px solid var(--border);"><div style="font-weight:800;">${_ptEsc(p.title)}</div><div style="font-size:12px;color:var(--muted);">Montado pelo personal <b>${_ptEsc(p.personalName)}</b></div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">${p.days.map((d, i) => `<button style="${_ptBtnP}padding:7px 12px;" onclick="startPersonalPlan('${p.id}',${i})">▶ ${_ptEsc(d.name)} (${d.exs.length})</button>`).join('')}${edit(p)}</div></div>`).join('') : ''}
     ${req}</div>`;
 }
+function _ptUnreadSig() { return _notifs.filter(n => n.type === 'message' && !n.read).length; }
 function startPersonalPlan(id, di) {
   const p = _planIndex[id], d = p && p.days[di]; if (!d || !d.exs.length) return;
   if (!ensureAthleteSelected()) return;
-  state.planTargets = {}; d.exs.forEach(e => { state.planTargets[e.ex] = { ...e, planId: p.id, by: p.personalName, personalUid: p.personalUid || null }; });
+  state.planTargets = {}; d.exs.forEach(e => { state.planTargets[e.ex] = { ...e, planId: p.id, by: p.personalName, personalUid: p.personalUid || null, dayIdx: di, dayName: d.name }; });
   state.group = d.exs[0].group; state.sheetSelected = d.exs.map(e => e.ex); state.mode = state.mode || 'alone';
   if (!state.activeTraining) { state.activeTraining = true; state.trainStart = new Date().toISOString(); startTrainTimer(); }
   updateTrainStatus('training');
@@ -4507,35 +4551,50 @@ function selectDashLinked(uid) {
   renderDashUserPills(); renderDashboard();
 }
 function ptViewEvolution(uid) { state.dashLinked = uid; state.dashUserId = null; goPage('dashboard'); renderDashUserPills(); renderDashboard(); }
+// Each linked student gets a hidden local "mirror athlete" (id lk_<uid>) so a session recorded on the personal's phone
+// works exactly like any local athlete (last-workout prefill, PRs, summary, share, history). Lists show only the 🔗 pill.
+function ptProxyFor(uid) { return getActiveUsers().find(u => u.linkedUid === uid) || null; }
+function ptEnsureProxy(l) {
+  let p = ptProxyFor(l.studentUid);
+  if (!p) { p = { id: 'lk_' + l.studentUid, slotIndex: users.length, name: l.studentName || l.studentEmail, avatar: '🔗', createdAt: new Date().toISOString(), linkedUid: l.studentUid }; users.push(p); try { saveUsers(); } catch (e) { console.warn(e); } }
+  return p;
+}
+function ptTreinoLinkedUid() { const u = getActiveUsers().find(x => x.id === state.activeUserId); return (u && u.linkedUid) || null; }
+function _linkedEntriesFor(uid, own) {   // the student's own account history + sessions the personal recorded on this phone
+  const px = (users || []).find(u => u && u.linkedUid === uid);
+  return (_linkedHist[uid] || []).concat(px ? (own || []).filter(h => h.userId === px.id) : []);
+}
 function renderSoloUserPills() {
   _renderSoloUserPillsBase();
   const el = document.getElementById('soloUserPills'); if (!el) return;
-  const linked = ptMyStudentsList();
-  if (state.treinoLinked && !linked.find(l => l.studentUid === state.treinoLinked)) state.treinoLinked = null;
-  if (!linked.length) { renderLinkedStudentCard(); return; }
-  if (state.treinoLinked) el.querySelectorAll('.user-pill.selected').forEach(p => p.classList.remove('selected'));
-  el.insertAdjacentHTML('beforeend', linked.map(l => `<div class="user-pill ${state.treinoLinked === l.studentUid ? 'selected' : ''}" onclick="selectTreinoLinked('${l.studentUid}')"><span class="up-avatar">🔗</span>${_ptEsc(l.studentName || l.studentEmail)}</div>`).join(''));
+  el.querySelectorAll('.user-pill').forEach(pl => { if ((pl.getAttribute('onclick') || '').indexOf("'lk_") >= 0) pl.remove(); });
+  const linked = ptMyStudentsList(), cur = ptTreinoLinkedUid();
+  el.insertAdjacentHTML('beforeend', linked.map(l => `<div class="user-pill ${cur === l.studentUid ? 'selected' : ''}" onclick="selectTreinoLinked('${l.studentUid}')"><span class="up-avatar">🔗</span>${_ptEsc(l.studentName || l.studentEmail)}</div>`).join(''));
   renderLinkedStudentCard();
 }
 function selectTreinoLinked(uid) {
-  state.treinoLinked = state.treinoLinked === uid ? null : uid;
-  renderSoloUserPills();
-  const l = state.treinoLinked && ptMyStudentsList().find(x => x.studentUid === uid);
-  if (l) { showToast('🔗 ' + (l.studentName || l.studentEmail) + ' selecionado — monte o treino abaixo'); ptEnsureLinkedHist(); }
+  const l = ptMyStudentsList().find(x => x.studentUid === uid); if (!l) return;
+  const p = ptEnsureProxy(l);
+  if (state.mode !== 'alone') { try { setMode('alone'); } catch (e) {} }
+  if (state.activeUserId === p.id) state.activeUserId = null;
+  else {
+    state.activeUserId = p.id; state.p1name = p.name;
+    try { localStorage.setItem(LAST_ATHLETE_KEY.alone, p.id); } catch (e) {}
+    showToast('🔗 ' + p.name + ' selecionado — veja o treino montado abaixo'); ptEnsureLinkedHist();
+  }
+  renderSoloUserPills(); renderTrainerPlans(true);
 }
 function renderLinkedStudentCard() {
   const el = _pt$('linkedStudentCard'); if (!el) return;
-  const uid = state.treinoLinked, l = uid && ptMyStudentsList().find(x => x.studentUid === uid);
+  const uid = ptTreinoLinkedUid(), l = uid && ptMyStudentsList().find(x => x.studentUid === uid);
   if (!l) { el.innerHTML = ''; return; }
   const st = _studentList().find(s => s.key === 'R:' + uid); if (!st) { el.innerHTML = ''; return; }
-  const t = st.stats, plans = _plansAsPersonal.filter(p => p.studentUid === uid).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  const sb = 'padding:7px 11px;font-size:12px;';
+  const t = st.stats, sb = 'padding:7px 11px;font-size:12px;';
   el.innerHTML = `<div style="${_ptCard}padding:14px;margin-bottom:14px;border-color:#3b82f6;">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><div><div style="font-family:var(--font-display);font-size:18px;font-weight:800;">🔗 ${_ptEsc(st.name)}</div><div style="font-size:12px;color:var(--muted);">Conta vinculada — o aluno treina pelo próprio app</div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><div><div style="font-family:var(--font-display);font-size:18px;font-weight:800;">🔗 ${_ptEsc(st.name)}</div><div style="font-size:12px;color:var(--muted);">Conta vinculada — a sessão que você registrar aqui fica no seu app, no nome dele</div></div>
       <span style="flex:none;font-size:11px;font-weight:800;color:${t.att.color};border:1.5px solid ${t.att.color};border-radius:12px;padding:3px 9px;">${t.att.label}</span></div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px;"><span>${st.loading ? 'carregando…' : 'Último treino: ' + _ptAgo(t.last)}</span><span>📅 ${t.s7} treino(s)/7d</span><span>📈 ${t.perWeek.toFixed(1)}/sem (meta ${t.goal})</span>${t.trend !== null ? `<span style="color:${t.trend >= 0 ? '#22c55e' : '#ef4444'};">${t.trend >= 0 ? '▲' : '▼'} ${Math.abs(t.trend)}% vol.</span>` : ''}</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;"><button style="${_ptBtnP}${sb}" onclick="openPlanBuilder('R:${uid}')">🏅 Montar treino</button><button style="${_ptBtn}${sb}" onclick="ptViewEvolution('${uid}')">📈 Ver evolução</button><button style="${_ptBtn}${sb}" onclick="openStudentModal('R:${uid}')">👤 Detalhes e avaliação</button><button style="${_ptBtn}${sb}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button></div>
-    ${plans.length ? `<div style="margin-top:12px;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:800;">Treinos enviados</div>` + plans.map(p => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--border);"><div><div style="font-weight:700;">${_ptEsc(p.title)}</div><div style="font-size:12px;color:var(--muted);">${p.days.length} dia(s) · ${p.days.reduce((a, d) => a + d.exs.length, 0)} exercícios</div></div><button style="${_ptBtn}${sb}" onclick="openPlanBuilder('R:${uid}','${p.id}')">Editar</button></div>`).join('') : '<div style="font-size:13px;color:var(--muted);margin-top:10px;">Nenhum treino enviado ainda. O treino montado aparece no app do aluno como “Treino montado pelo personal”.</div>'}</div>`;
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;"><button style="${_ptBtnP}${sb}" onclick="openPlanBuilder('R:${uid}')">🏅 Montar treino</button><button style="${_ptBtn}${sb}" onclick="ptViewEvolution('${uid}')">📈 Ver evolução</button><button style="${_ptBtn}${sb}" onclick="openStudentModal('R:${uid}')">👤 Detalhes e avaliação</button><button style="${_ptBtn}${sb}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button></div></div>`;
 }
 
 function syncStopButtons() {
@@ -5797,7 +5856,6 @@ function getAccountAsAthlete() {
 }
 
 function ensureAthleteSelected() {
-  if (state.treinoLinked) { showToast('🔗 Aluno vinculado selecionado — ele treina pelo próprio app. Selecione um atleta seu para treinar aqui.', 5000); return false; }
   // Called before starting any training — ensures at least 1 athlete is selected
   const active = getActiveUsers();
   if (!active.length) return true; // no athletes registered, allow anyway
@@ -5994,7 +6052,7 @@ function renderGroupUserPills() {
 
 function renderDashUserPills() {
   const el = document.getElementById('dashUserPills'); if (!el) return;
-  const active = getActiveUsers(), linked = ptMyStudentsList();
+  const active = getActiveUsers().filter(u => !u.linkedUid), linked = ptMyStudentsList();
   if (state.dashLinked && !linked.find(l => l.studentUid === state.dashLinked)) state.dashLinked = null;   // link removed
   const box = document.getElementById('dashUserSearch');
   const many = active.length + linked.length > 6;       // search appears when there are many profiles
@@ -6267,7 +6325,6 @@ function deleteGroup(id, e) {
 // EXERCISE BOTTOM SHEET
 // ═══════════════════════════════════════════════════════
 function openExSheet(groupName) {
-  if (state.treinoLinked) { showToast('🔗 Aluno vinculado: ele treina pelo próprio app. Toque em “Montar treino” para enviar o treino a ele.', 5000); return; }
   const groups = getAllGroups();
   const g = groups.find(x => x.name === groupName);
   document.getElementById('sheetGroupIcon').textContent = g ? g.icon : '💪';
@@ -7983,7 +8040,7 @@ function concludeExercise() {
 
   // v36: build the entry, then update ALL in-memory state first, so a failure
   // in any later step (storage, rendering) can never leave a half-concluded exercise.
-  const entry = {id:Date.now(),date:new Date().toISOString(),exercise:exerciseName,group:state.group,mode:state.mode,p1name:state.p1name,p2name:state.p2name,userId:uid||null,userId2:uid2||null,groupUserIds,series:[...state.currentSeries],notes,trainStart:state.trainStart,isAerobic,planId:((state.planTargets||{})[exerciseName]||{}).planId||null};
+  const entry = {id:Date.now(),date:new Date().toISOString(),exercise:exerciseName,group:state.group,mode:state.mode,p1name:state.p1name,p2name:state.p2name,userId:uid||null,userId2:uid2||null,groupUserIds,series:[...state.currentSeries],notes,trainStart:state.trainStart,isAerobic,planId:((state.planTargets||{})[exerciseName]||{}).planId||null,planDay:((state.planTargets||{})[exerciseName]||{}).dayIdx,planDayName:((state.planTargets||{})[exerciseName]||{}).dayName};
   history.unshift(entry);
   if(!state.completedEx[state.group])state.completedEx[state.group]=[];
   if(!state.completedEx[state.group].includes(exerciseName))state.completedEx[state.group].push(exerciseName);
@@ -9780,7 +9837,7 @@ function renderDashboard() {
   const uid = state.dashLinked;
   if (!uid) return _renderDashboardBase();
   const orig = history, ouid = state.dashUserId;
-  history = _linkedHist[uid] || []; state.dashUserId = null;
+  history = _linkedEntriesFor(uid, orig); state.dashUserId = null;
   try { _renderDashboardBase(); } finally { history = orig; state.dashUserId = ouid; }
 }
 function _renderDashboardBase() {
