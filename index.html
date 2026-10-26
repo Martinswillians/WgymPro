@@ -2966,7 +2966,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
     </div>
     <div class="settings-item" onclick="openLinksModal()">
-      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v51</div></div></div>
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v52</div></div></div>
       <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
     </div>
   </div>
@@ -4015,7 +4015,7 @@ function renderLinksModal() {
     ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
     ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
     ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
-    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v51</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v52</div>`;
 }
 async function ptSendFromInput() {
   const inp = _pt$('ptLinkEmail'); if (!inp) return;
@@ -4401,7 +4401,7 @@ setInterval(async () => {
     applyPersonalMode();
     if (!_fbOk()) return;
     _netN++;
-    if (_netN % 10 === 1 && !window._ntBusy) { window._ntBusy = true; try { await refreshNotifs(true); } finally { window._ntBusy = false; } }   // every ~30 s
+    if (_netN % 10 === 1 && !window._ntBusy) { window._ntBusy = true; try { await refreshNotifs(true); await ptImportSessions(); await ptFlushOutbox(); } finally { window._ntBusy = false; } }   // every ~30 s
     if (!window._dirDone && (window._dirTry || 0) < 3 && !window._dirBusy) { window._dirBusy = true; window._dirTry = (window._dirTry || 0) + 1; await ensureDirectory(); window._dirBusy = false; }
     if ((!_linksLoaded && (window._lkTry || 0) < 3 || _netN % 20 === 0) && !window._lkBusy) { window._lkTry = (window._lkTry || 0) + 1; window._lkBusy = true; await refreshLinks(true); await refreshPlans(); window._lkBusy = false; renderTrainerPlans(false); }
   } catch (e) { window._dirBusy = false; window._lkBusy = false; }
@@ -4415,7 +4415,7 @@ setTimeout(applyPersonalMode, 1200);
 // (every ~30 s while the app is open, and when the app comes back to the foreground).
 // ═══════════════════════════════════════════════════════════════════
 let _notifs = [], _notifLoaded = false, _notifErr = null;
-const _NOTIF_ICON = { invite: '📨', accepted: '✅', declined: '🚫', canceled: '🚫', removed: '🚫', plan_new: '🏅', plan_update: '🔄', message: '💬', request_new: '🆕', request_update: '🔄', workout_done: '💪' };
+const _NOTIF_ICON = { invite: '📨', accepted: '✅', declined: '🚫', canceled: '🚫', removed: '🚫', plan_new: '🏅', plan_update: '🔄', message: '💬', request_new: '🆕', request_update: '🔄', workout_done: '💪', session: '🏋️' };
 function _ptTimeAgo(ts) { const m = Math.floor((Date.now() - ts) / 60000); if (m < 1) return 'agora'; if (m < 60) return m + ' min'; const h = Math.floor(m / 60); if (h < 24) return h + ' h'; const d = Math.floor(h / 24); return d + (d === 1 ? ' dia' : ' dias'); }
 async function ptNotify(toUid, type, title, body, extra) {
   try {
@@ -4507,6 +4507,7 @@ async function ptNotifOpen(id) {
     case 'plan_new': case 'plan_update': await refreshPlans(); goPage('treino'); renderTrainerPlans(true); break;
     case 'message': { if (!_links.find(l => l.id === n.linkId)) await refreshLinks(true); openChat(n.linkId); break; }
     case 'request_new': case 'request_update': case 'workout_done': goPage('personal'); await ptRefreshAll(false); openStudentModal('R:' + n.fromUid); break;
+    case 'session': await ptImportSessions(); goPage('historico'); break;
     default: openLinksModal();   // invite / accepted / declined / canceled / removed
   }
 }
@@ -4561,8 +4562,10 @@ function ptEnsureProxy(l) {
 }
 function ptTreinoLinkedUid() { const u = getActiveUsers().find(x => x.id === state.activeUserId); return (u && u.linkedUid) || null; }
 function _linkedEntriesFor(uid, own) {   // the student's own account history + sessions the personal recorded on this phone
-  const px = (users || []).find(u => u && u.linkedUid === uid);
-  return (_linkedHist[uid] || []).concat(px ? (own || []).filter(h => h.userId === px.id) : []);
+  const px = (users || []).find(u => u && u.linkedUid === uid), remote = _linkedHist[uid] || [];
+  const delivered = new Set(remote.map(h => h && h.syncId).filter(Boolean));   // already in the student's history → don't count twice
+  const me = _fbUser ? _fbUser.uid : '';
+  return remote.concat(px ? (own || []).filter(h => h.userId === px.id && !delivered.has(me + '_' + uid + '_' + h.id)) : []);
 }
 function renderSoloUserPills() {
   _renderSoloUserPillsBase();
@@ -4595,6 +4598,77 @@ function renderLinkedStudentCard() {
       <span style="flex:none;font-size:11px;font-weight:800;color:${t.att.color};border:1.5px solid ${t.att.color};border-radius:12px;padding:3px 9px;">${t.att.label}</span></div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px;"><span>${st.loading ? 'carregando…' : 'Último treino: ' + _ptAgo(t.last)}</span><span>📅 ${t.s7} treino(s)/7d</span><span>📈 ${t.perWeek.toFixed(1)}/sem (meta ${t.goal})</span>${t.trend !== null ? `<span style="color:${t.trend >= 0 ? '#22c55e' : '#ef4444'};">${t.trend >= 0 ? '▲' : '▼'} ${Math.abs(t.trend)}% vol.</span>` : ''}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;"><button style="${_ptBtnP}${sb}" onclick="openPlanBuilder('R:${uid}')">🏅 Montar treino</button><button style="${_ptBtn}${sb}" onclick="ptViewEvolution('${uid}')">📈 Ver evolução</button><button style="${_ptBtn}${sb}" onclick="openStudentModal('R:${uid}')">👤 Detalhes e avaliação</button><button style="${_ptBtn}${sb}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button></div></div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// v52 — Sessions recorded by the personal are delivered to the STUDENT's own history
+//  personal phone:  concludeExercise → local outbox (survives offline) → Firestore  sessions/{personalUid_studentUid_entryId}
+//  student phone:   polls  sessions where studentUid == me  → imports into his history (as his own athlete) → deletes the doc
+// ═══════════════════════════════════════════════════════════════════
+function _outbox() { try { return JSON.parse(localStorage.getItem('wgym_session_outbox') || '[]'); } catch (e) { return []; } }
+function _saveOutbox(a) { try { localStorage.setItem('wgym_session_outbox', JSON.stringify(a)); } catch (e) {} }
+function ptQueueSessionSend(entry) {
+  const px = (users || []).find(u => u && u.id === entry.userId && u.linkedUid); if (!px) return;     // only mirror-athlete sessions
+  const ob = _outbox().filter(x => x.entry.id !== entry.id);
+  ob.push({ studentUid: px.linkedUid, studentName: px.name, entry: JSON.parse(JSON.stringify(entry)), ts: Date.now(), tries: 0 });
+  _saveOutbox(ob); ptFlushOutbox();
+}
+let _obBusy = false;
+async function ptFlushOutbox() {
+  if (_obBusy || !_fbOk() || !_outbox().length) return;
+  _obBusy = true;
+  const delivered = new Set(), failed = new Set();
+  try {
+    const me = _me();
+    for (const it of _outbox()) {
+      try {
+        await FB.setDoc(FB.docRef('sessions', me.uid + '_' + it.studentUid + '_' + it.entry.id), { personalUid: me.uid, personalName: me.name, studentUid: it.studentUid, studentName: it.studentName, entry: it.entry, ts: it.ts });
+        delivered.add(it.entry.id);
+      } catch (e) { failed.add(it.entry.id); console.warn('[WGym] session delivery pending (link removed or rules not published?)', e); }
+    }
+  } finally {
+    _saveOutbox(_outbox().filter(x => !delivered.has(x.entry.id)).map(x => failed.has(x.entry.id) ? { ...x, tries: (x.tries || 0) + 1 } : x).filter(x => (x.tries || 0) < 20));
+    _obBusy = false;
+  }
+}
+function ptNotifySessionDelivered(trainStart) {
+  const lk = ptTreinoLinkedUid(); if (!lk || !_fbOk() || !trainStart) return;
+  const px = ptProxyFor(lk), n = history.filter(h => h.trainStart === trainStart && px && h.userId === px.id).length;
+  if (n) ptNotify(lk, 'session', 'Treino registrado pelo personal', _me().name + ' registrou ' + n + (n > 1 ? ' exercícios' : ' exercício') + ' do seu treino no seu histórico', { linkId: _fbUser.uid + '_' + lk });
+}
+function _myMainAthlete() {   // the athlete profile that represents the account owner
+  const a = getActiveUsers().filter(u => !u.linkedUid); if (!a.length) return null;
+  const nm = _ptNorm((currentAccount && currentAccount.name) || '');
+  return a.find(u => _ptNorm(u.name) === nm) || a[0];
+}
+let _impBusy = false;
+async function ptImportSessions() {
+  if (_impBusy || !_fbOk()) return 0;
+  _impBusy = true; let added = [];
+  try {
+    const rows = await FB.queryDocs(['sessions'], 'studentUid', _fbUser.uid);
+    if (!rows.length) return 0;
+    const ath = _myMainAthlete(), have = new Set(history.map(h => h.syncId).filter(Boolean)), ids = new Set(history.map(h => h.id));
+    for (const r of rows) {
+      const d = r.data, e = d && d.entry; if (!e || have.has(r.id)) continue;
+      const c = JSON.parse(JSON.stringify(e));
+      let id = Number(c.id) || Date.now(); while (ids.has(id)) id++; ids.add(id);
+      c.id = id; c.syncId = r.id; c.byPersonal = d.personalName || '';
+      c.userId = ath ? ath.id : null; c.userId2 = null; c.groupUserIds = [];
+      c.p1name = ath ? ath.name : ((currentAccount && currentAccount.name) || c.p1name);
+      (c.series || []).forEach(x => { if (x.player) x.player = c.p1name; });
+      added.push(c); have.add(r.id);
+    }
+    if (added.length) {
+      history.push(...added); history.sort((a, b) => new Date(b.date) - new Date(a.date));
+      if (!saveHistory()) { history = history.filter(h => !added.includes(h)); added = []; return 0; }   // no space → keep the docs and retry later
+      try { renderHistory(); renderDashboard(); renderTrainerPlans(true); } catch (e) {}
+      showToast('🏋️ ' + added.length + (added.length > 1 ? ' exercícios registrados' : ' exercício registrado') + ' pelo seu personal foram adicionados ao seu histórico', 6000);
+    }
+    for (const r of rows) { try { await FB.deleteDoc(FB.docRef('sessions', r.id)); } catch (e) {} }   // delivered
+  } catch (e) { console.warn('[WGym] import sessions', e); }
+  finally { _impBusy = false; }
+  return added.length;
 }
 
 function syncStopButtons() {
@@ -8042,6 +8116,7 @@ function concludeExercise() {
   // in any later step (storage, rendering) can never leave a half-concluded exercise.
   const entry = {id:Date.now(),date:new Date().toISOString(),exercise:exerciseName,group:state.group,mode:state.mode,p1name:state.p1name,p2name:state.p2name,userId:uid||null,userId2:uid2||null,groupUserIds,series:[...state.currentSeries],notes,trainStart:state.trainStart,isAerobic,planId:((state.planTargets||{})[exerciseName]||{}).planId||null,planDay:((state.planTargets||{})[exerciseName]||{}).dayIdx,planDayName:((state.planTargets||{})[exerciseName]||{}).dayName};
   history.unshift(entry);
+  try { ptQueueSessionSend(entry); } catch (e) { console.warn('[WGym] session outbox', e); }   // v52: a session recorded for a linked student is delivered to him
   if(!state.completedEx[state.group])state.completedEx[state.group]=[];
   if(!state.completedEx[state.group].includes(exerciseName))state.completedEx[state.group].push(exerciseName);
   state.currentSeries=[];
@@ -8352,7 +8427,7 @@ function confirmStopTraining() {
 }
 
 function concludeTraining() {
-  try { ptNotifyWorkoutDone(state.planTargets, state.trainStart); } catch (e) { console.warn(e); }
+  try { ptNotifyWorkoutDone(state.planTargets, state.trainStart); ptNotifySessionDelivered(state.trainStart); ptFlushOutbox(); } catch (e) { console.warn(e); }
   state.planTargets = null;
   if(!state.activeTraining){showToast('Nenhum treino em andamento');return;}
 

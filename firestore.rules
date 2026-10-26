@@ -1,6 +1,6 @@
 rules_version = '2';
 // ─────────────────────────────────────────────────────────────────────────────
-// Will Gym PRO — regras do Firestore (v48: vínculo personal ↔ aluno + notificações)
+// Will Gym PRO — regras do Firestore (v52: vínculo personal ↔ aluno + notificações + sessões)
 // Publique em: Firebase Console → Firestore Database → Regras.
 // ATENÇÃO: se você já tem regras para  users/{uid}/...  mantenha o bloco "users" abaixo
 // (ou mescle). Sem estas regras o app continua funcionando normalmente para treinar,
@@ -80,6 +80,27 @@ service cloud.firestore {
       allow update: if signedIn() && resource.data.toUid == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
       allow delete: if signedIn() && resource.data.toUid == request.auth.uid;
+    }
+
+    // Sessões registradas pelo personal no celular dele para o aluno (id = personalUid_studentUid_idDoExercicio).
+    // O personal cria (só com vínculo aceito); o aluno lê, importa para o próprio histórico e apaga.
+    match /sessions/{sid} {
+      allow get: if signedIn() && (resource == null ||
+        resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
+      allow list: if signedIn() &&
+        (resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.personalUid == request.auth.uid
+        && request.resource.data.studentUid != request.auth.uid
+        && sid.matches(request.auth.uid + '_' + request.resource.data.studentUid + '_.*')
+        && linkAccepted(request.auth.uid, request.resource.data.studentUid);
+      allow update: if signedIn()
+        && resource.data.personalUid == request.auth.uid
+        && request.resource.data.personalUid == request.auth.uid
+        && request.resource.data.studentUid == resource.data.studentUid
+        && linkAccepted(request.auth.uid, request.resource.data.studentUid);
+      allow delete: if signedIn() &&
+        (resource.data.personalUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
     }
 
     // Treinos montados pelo personal para o aluno
