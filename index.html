@@ -2069,6 +2069,32 @@ select.form-input option { background: var(--card2); color: var(--text); }
   margin-top: 8px; font-family: var(--font-body); outline: none;
 }
 .spotify-client-id-setup input:focus { border-color: #1DB954; }
+
+.cht{display:grid;grid-template-columns:minmax(260px,350px) 1fr;gap:12px;height:calc(100vh - 175px);min-height:440px;}
+.cht-pane{background:var(--card,#1a1a22);border:1px solid var(--border);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;min-height:0;position:relative;}
+#chtItems{overflow-y:auto;flex:1;}
+.cht-item{display:flex;gap:10px;padding:10px 12px;border-top:1px solid var(--border);cursor:pointer;align-items:center;}
+.cht-item:hover,.cht-item.sel{background:rgba(255,61,37,.09);}
+.cht-it-main{min-width:0;flex:1;}
+.cht-it-top,.cht-it-sub{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.cht-it-sub>span:first-child{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cht-time{font-size:11px;color:var(--muted);flex:none;}
+.cht-sec{padding:8px 12px 4px;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:800;border-top:1px solid var(--border);}
+.cht-head{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);}
+.cht-back{display:none;background:none;border:none;color:var(--text);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;}
+.cht-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:3px;min-height:0;}
+.cht-row{display:flex;}.cht-row.mine{justify-content:flex-end;}
+.cht-bub{max-width:78%;background:var(--bg2);padding:7px 11px;border-radius:14px 14px 14px 4px;font-size:14px;white-space:pre-wrap;word-break:break-word;}
+.cht-bub.mine{background:var(--primary);color:#fff;border-radius:14px 14px 4px 14px;}
+.cht-meta{font-size:10px;opacity:.75;text-align:right;margin-top:2px;white-space:nowrap;}
+.cht-del{cursor:pointer;margin-left:6px;opacity:.6;}
+.cht-who{font-size:11px;font-weight:800;color:var(--primary);margin-bottom:2px;}
+.cht-day{align-self:center;font-size:11px;color:var(--muted);background:var(--bg2);padding:3px 10px;border-radius:10px;margin:8px 0 4px;}
+.cht-new{align-self:stretch;display:flex;align-items:center;gap:8px;color:var(--primary);font-size:11px;font-weight:800;text-transform:uppercase;margin:8px 0;}
+.cht-new:before,.cht-new:after{content:"";flex:1;height:1px;background:var(--primary);opacity:.5;}
+.cht-compose{display:flex;gap:8px;padding:10px;border-top:1px solid var(--border);align-items:flex-end;}
+.cht-compose textarea{flex:1;resize:none;max-height:120px;min-height:42px;border-radius:12px;border:1.5px solid var(--border);background:var(--bg2);color:var(--text);padding:10px 12px;font-family:var(--font-body);font-size:14px;}
+@media(max-width:760px){.cht{grid-template-columns:1fr;height:calc(100vh - 150px);}.cht.in-conv .cht-list{display:none;}.cht:not(.in-conv) .cht-conv{display:none;}.cht-back{display:inline-flex;}}
 </style>
 
   <!-- Service Worker cleanup — see note below -->
@@ -2121,7 +2147,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       } = await import("https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js");
       const {
         getFirestore, doc, setDoc, getDoc, collection, getDocs,
-        serverTimestamp, enableIndexedDbPersistence, query, where, deleteDoc
+        serverTimestamp, enableIndexedDbPersistence, query, where, deleteDoc, orderBy, limit, onSnapshot
       } = await import("https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js");
 
       // Your web app's Firebase configuration (public keys — safe to expose client-side)
@@ -2162,6 +2188,13 @@ select.form-input option { background: var(--card2); color: var(--text); }
         queryDocs: async (path, field, value) => { const snap = await getDocs(query(collection(fbDb, ...path), where(field, '==', value))); return snap.docs.map(d => ({ id: d.id, data: d.data() })); },
         listDocs: async (...path) => { const snap = await getDocs(collection(fbDb, ...path)); return snap.docs.map(d => ({ id: d.id, data: d.data() })); },
         deleteDoc: (ref) => deleteDoc(ref),
+        // v53 (chat): realtime listener.  cons = [['where',field,op,value] | ['orderBy',field,dir] | ['limit',n]]  → returns the unsubscribe function
+        listen: (path, cons, cb, errCb) => {
+          const parts = (cons || []).map(c => c[0] === 'where' ? where(c[1], c[2], c[3]) : c[0] === 'orderBy' ? orderBy(c[1], c[2] || 'asc') : limit(c[1]));
+          return onSnapshot(query(collection(fbDb, ...path), ...parts),
+            snap => cb(snap.docs.map(d => ({ id: d.id, data: d.data() }))),
+            err => { if (errCb) errCb(err); });
+        },
         serverTimestamp: () => serverTimestamp(),
         // Change-password support: Firebase requires a recent login before
         // letting you change the password. If the session is "old", it throws
@@ -2313,6 +2346,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
     <button class="nav-tab" onclick="goPage('planos',this)">📊 Planos</button>
     <button class="nav-tab" onclick="goPage('configuracoes',this)">⚙️ Config</button>
     <button class="nav-tab" id="navPersonal" style="display:none;" onclick="goPage('personal',this)">🏅 Alunos</button>
+    <button class="nav-tab" id="navChat" style="display:none;" onclick="goPage('chat',this)">💬 Chat <span id="chatBadge" style="display:none;background:#ef4444;color:#fff;border-radius:9px;padding:1px 6px;font-size:10px;font-weight:800;margin-left:3px;"></span></button>
   </div>
 </div>
 
@@ -2936,6 +2970,8 @@ select.form-input option { background: var(--card2); color: var(--text); }
 <!-- PAGE: CONFIGURACOES -->
 <div id="page-personal" class="page"><div id="personalRoot"></div></div>
 
+<div id="page-chat" class="page"><div id="chatRoot"></div></div>
+
 <div id="page-configuracoes" class="page">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;"><span style="font-family:var(--font-display);font-size:22px;font-weight:800;text-transform:uppercase;letter-spacing:1px;">⚙️ Configurações</span></div>
 
@@ -2966,7 +3002,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
     </div>
     <div class="settings-item" onclick="openLinksModal()">
-      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v52</div></div></div>
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v53</div></div></div>
       <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
     </div>
   </div>
@@ -3853,6 +3889,8 @@ function saveTrainerData() {
 }
 function applyPersonalMode() {
   const on = _isPersonal();
+  const ct = _pt$('navChat'); if (ct) ct.style.display = _fbOk() ? '' : 'none';                       // chat needs an account
+  if (_fbOk() && _chatUid !== _fbUser.uid) { try { ptChatStart(); } catch (e) { console.warn('[WGym] chat start', e); } }
   const t = _pt$('navPersonal'); if (t) t.style.display = on ? '' : 'none';
   const st = _pt$('personalModeState'); if (st) { st.textContent = on ? 'Ativado ✓' : 'Desativado'; st.style.color = on ? 'var(--success,#2ECC71)' : 'var(--muted)'; }
 }
@@ -4015,7 +4053,7 @@ function renderLinksModal() {
     ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
     ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
     ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
-    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v52</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v53</div>`;
 }
 async function ptSendFromInput() {
   const inp = _pt$('ptLinkEmail'); if (!inp) return;
@@ -4025,7 +4063,7 @@ async function ptSendFromInput() {
 
 // ── Recados (chat) ──
 let _chat = null;
-function ptUnreadMsgs(linkId) { return _notifs.filter(n => n.type === 'message' && !n.read && n.linkId === linkId).length; }
+function _ptUnreadMsgsLegacy(linkId) { return _notifs.filter(n => n.type === 'message' && !n.read && n.linkId === linkId).length; }
 function _unreadBadge(n) { return n ? `<span style="background:#ef4444;color:#fff;border-radius:9px;padding:1px 6px;font-size:10px;font-weight:800;margin-left:4px;">${n > 9 ? '9+' : n}</span>` : ''; }
 function _refreshMsgBadges() {
   try { if (_pt$('ptLinksBody')) { const v = (_pt$('ptLinkEmail') || {}).value; renderLinksModal(); if (v && _pt$('ptLinkEmail')) _pt$('ptLinkEmail').value = v; } } catch (e) {}
@@ -4038,7 +4076,7 @@ async function ptMarkChatRead(linkId) {
   u.forEach(n => n.read = true); renderBell(); _refreshMsgBadges(); if (_pt$('notifPanel')) renderNotifPanel();
   await Promise.all(u.map(n => FB.setDoc(FB.docRef('notifications', n.id), { read: true }, { merge: true }).catch(() => {})));
 }
-async function openChat(linkId) {
+async function _openChatLegacy(linkId) {
   const l = _links.find(x => x.id === linkId); if (!l) return;
   const o = _myRole(l) === 'personal' ? l.studentName : l.personalName;
   _ptOverlay('ptChat', `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><div style="font-family:var(--font-display);font-size:18px;font-weight:800;">💬 ${_ptEsc(o || 'Recados')}</div><button style="${_ptBtn}" onclick="_ptClose('ptChat')">✕</button></div>
@@ -4415,7 +4453,7 @@ setTimeout(applyPersonalMode, 1200);
 // (every ~30 s while the app is open, and when the app comes back to the foreground).
 // ═══════════════════════════════════════════════════════════════════
 let _notifs = [], _notifLoaded = false, _notifErr = null;
-const _NOTIF_ICON = { invite: '📨', accepted: '✅', declined: '🚫', canceled: '🚫', removed: '🚫', plan_new: '🏅', plan_update: '🔄', message: '💬', request_new: '🆕', request_update: '🔄', workout_done: '💪', session: '🏋️' };
+const _NOTIF_ICON = { invite: '📨', accepted: '✅', declined: '🚫', canceled: '🚫', removed: '🚫', plan_new: '🏅', plan_update: '🔄', message: '💬', request_new: '🆕', request_update: '🔄', workout_done: '💪', session: '🏋️', contact_request: '👋', contact_accepted: '🤝', group_invite: '👥' };
 function _ptTimeAgo(ts) { const m = Math.floor((Date.now() - ts) / 60000); if (m < 1) return 'agora'; if (m < 60) return m + ' min'; const h = Math.floor(m / 60); if (h < 24) return h + ' h'; const d = Math.floor(h / 24); return d + (d === 1 ? ' dia' : ' dias'); }
 async function ptNotify(toUid, type, title, body, extra) {
   try {
@@ -4508,6 +4546,8 @@ async function ptNotifOpen(id) {
     case 'message': { if (!_links.find(l => l.id === n.linkId)) await refreshLinks(true); openChat(n.linkId); break; }
     case 'request_new': case 'request_update': case 'workout_done': goPage('personal'); await ptRefreshAll(false); openStudentModal('R:' + n.fromUid); break;
     case 'session': await ptImportSessions(); goPage('historico'); break;
+    case 'contact_request': goPage('chat'); openNewChatSheet(); break;
+    case 'contact_accepted': case 'group_invite': goPage('chat'); break;
     default: openLinksModal();   // invite / accepted / declined / canceled / removed
   }
 }
@@ -4669,6 +4709,379 @@ async function ptImportSessions() {
   } catch (e) { console.warn('[WGym] import sessions', e); }
   finally { _impBusy = false; }
   return added.length;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// v53 — CHAT  (aba "💬 Chat")
+//  • Conversas diretas aluno↔personal, aluno↔aluno (contato aceito por e-mail) e grupos (com convite)
+//  • Tempo real (Firestore onSnapshot), não lidas, "visto" (✓✓), divisor "Novas mensagens", apagar a própria mensagem
+//  Firestore:  chats/{d_<uidA>_<uidB> | g_<id>}  ·  chats/{id}/messages/{id}  ·  contacts/{uidA_uidB}
+// ═══════════════════════════════════════════════════════════════════
+let _chats = {}, _chatPending = [], _contactDocs = [], _chatUnsubs = [], _chatUid = null, _chatLoaded = false, _chatErr = null, _cv = null;
+const _cid2 = (a, b) => a < b ? a + '_' + b : b + '_' + a;
+const _meUid = () => (_fbUser ? _fbUser.uid : '');
+function _hue(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; }
+function _avatarHtml(name, size, icon) {
+  const n = String(name || '?').trim(), ini = icon || (n.split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase() || '?');
+  return `<div style="width:${size}px;height:${size}px;border-radius:50%;flex:none;background:hsl(${_hue(n)},45%,32%);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:${Math.round(size * 0.4)}px;">${_ptEsc(ini)}</div>`;
+}
+function _chatFmtTime(ts) {
+  const d = new Date(ts), n = new Date();
+  if (d.toDateString() === n.toDateString()) return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === new Date(n - 864e5).toDateString()) return 'Ontem';
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+}
+function _chatDayLabel(ts) {
+  const d = new Date(ts), n = new Date();
+  if (d.toDateString() === n.toDateString()) return 'Hoje';
+  if (d.toDateString() === new Date(n - 864e5).toDateString()) return 'Ontem';
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' });
+}
+// contacts = accepted personal↔student links + accepted peer contacts
+function ptContacts() {
+  if (!_fbOk()) return [];
+  const me = _fbUser.uid, out = new Map();
+  _links.filter(l => l.status === 'accepted').forEach(l => { const mine = l.personalUid === me, uid = mine ? l.studentUid : l.personalUid; out.set(uid, { uid, name: mine ? l.studentName : l.personalName, email: mine ? l.studentEmail : l.personalEmail, kind: mine ? 'Aluno' : 'Personal' }); });
+  _contactDocs.filter(c => c.status === 'accepted').forEach(c => { const uid = c.uids.find(u => u !== me); if (uid && !out.has(uid)) out.set(uid, { uid, name: (c.names || {})[uid], email: (c.emails || {})[uid], kind: 'Contato' }); });
+  return [...out.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+function _nameOf(uid) {
+  const k = ptContacts().find(x => x.uid === uid); if (k && k.name) return k.name;
+  for (const c of [...Object.values(_chats), ..._chatPending]) if (c.memberNames && c.memberNames[uid]) return c.memberNames[uid];
+  return 'Usuário';
+}
+const _chatList = () => Object.values(_chats).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+function _chatTitle(c) { if (c.type === 'group') return c.name || 'Grupo'; return _nameOf(c.members.find(u => u !== _meUid())); }
+function _chatSub(c) {
+  if (c.type === 'group') return c.members.length + (c.members.length > 1 ? ' membros' : ' membro') + ((c.pending || []).length ? ' · ' + c.pending.length + ' convidado(s)' : '');
+  const k = ptContacts().find(x => x.uid === c.members.find(u => u !== _meUid())); return k ? k.kind : 'Conversa';
+}
+function chatUnreadTotal() { const me = _meUid(); return Object.values(_chats).reduce((a, c) => a + (((c.unread || {})[me]) || 0), 0); }
+function renderChatBadge() {
+  const me = _meUid(), n = chatUnreadTotal() + _chatPending.length + _contactDocs.filter(c => c.status === 'pending' && c.requestedBy !== me).length;
+  const b = _pt$('chatBadge'); if (b) { b.style.display = n ? 'inline-block' : 'none'; b.textContent = n > 9 ? '9+' : n; }
+}
+// compat with the old 💬 buttons (Conexões, Treino, painel do personal)
+function ptUnreadMsgs(linkId) {
+  const l = _links.find(x => x.id === linkId); if (!l || !_fbOk()) return 0;
+  const o = l.personalUid === _fbUser.uid ? l.studentUid : l.personalUid, c = _chats['d_' + _cid2(_fbUser.uid, o)];
+  return c ? (((c.unread || {})[_fbUser.uid]) || 0) : 0;
+}
+function openChat(linkId) {
+  const l = _links.find(x => x.id === linkId); if (!l || !_fbOk()) return;
+  ['ptLinks', 'ptStudent'].forEach(id => _ptClose(id));
+  goPage('chat'); ptChatOpenDirect(l.personalUid === _fbUser.uid ? l.studentUid : l.personalUid);
+}
+
+// ── realtime listeners ──
+function ptChatStop() {
+  _chatUnsubs.forEach(u => { try { u(); } catch (e) {} }); _chatUnsubs = [];
+  if (_cv && _cv.unsub) { try { _cv.unsub(); } catch (e) {} }
+  _cv = null; _chats = {}; _chatPending = []; _contactDocs = []; _chatLoaded = false; _chatErr = null; _chatUid = null;
+}
+function ptChatStart() {
+  if (!_fbOk() || !window.FB || !FB.listen) return;
+  if (_chatUid === _fbUser.uid) return;
+  ptChatStop(); _chatUid = _fbUser.uid; const me = _chatUid, err = e => { _chatErr = e; try { renderChatPage(); } catch (x) {} };
+  _chatUnsubs.push(FB.listen(['chats'], [['where', 'members', 'array-contains', me]], rows => _onChats(rows), err));
+  _chatUnsubs.push(FB.listen(['chats'], [['where', 'pending', 'array-contains', me]], rows => { _chatPending = rows.map(r => ({ id: r.id, ...r.data })); renderChatBadge(); if (_pt$('chtItems')) renderChatList(); }, err));
+  _chatUnsubs.push(FB.listen(['contacts'], [['where', 'uids', 'array-contains', me]], rows => { _contactDocs = rows.map(r => ({ id: r.id, ...r.data })); renderChatBadge(); if (_pt$('chtItems')) renderChatList(); if (_pt$('chtNewBody')) renderNewChatSheet(); try { _refreshMsgBadges(); } catch (e) {} }, err));
+}
+function _onChats(rows) {
+  const me = _meUid(), next = {};
+  rows.forEach(r => { next[r.id] = { id: r.id, ...r.data }; });
+  if (_chatLoaded) Object.values(next).forEach(c => { const lm = c.lastMessage, pv = _chats[c.id], pts = pv && pv.lastMessage ? pv.lastMessage.ts : 0; if (lm && lm.from !== me && lm.ts > pts) _chatIncoming(c, lm); });
+  _chats = next; _chatLoaded = true; _chatErr = null;
+  renderChatBadge(); if (_pt$('chtItems')) renderChatList(); if (_cv) _cvOnChat();
+  try { _refreshMsgBadges(); } catch (e) {}
+}
+function _chatViewing(id) { const pg = _pt$('page-chat'); return !!(_cv && _cv.id === id && !document.hidden && pg && pg.classList.contains('active')); }
+function _chatIncoming(c, lm) {
+  if (_chatViewing(c.id)) return;
+  const t = _chatTitle(c), txt = (c.type === 'group' ? lm.name + ': ' : '') + lm.text;
+  showToast('💬 ' + t + ' — ' + txt.slice(0, 70), 5000);
+  try { if (settings.vibration && navigator.vibrate) navigator.vibrate([100, 60, 100]); } catch (e) {}
+  const b = _pt$('navChat'); if (b) { b.classList.remove('bell-ring'); void b.offsetWidth; b.classList.add('bell-ring'); }
+  try { if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification(t, { body: txt.slice(0, 100), tag: 'chat_' + c.id }); } catch (e) {}
+}
+
+// ── page / list ──
+function renderChatPage() {
+  const root = _pt$('chatRoot'); if (!root) return;
+  if (!_pt$('chtList')) {
+    root.innerHTML = `<div class="cht" id="chtWrap">
+      <div class="cht-pane cht-list" id="chtList">
+        <div style="padding:12px 12px 8px;"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><div style="font-family:var(--font-display);font-size:20px;font-weight:800;text-transform:uppercase;">💬 Chat</div>
+          <div style="display:flex;gap:6px;"><button style="${_ptBtnP}padding:7px 11px;" onclick="openNewChatSheet()">＋ Nova</button></div></div>
+          <input id="chtSearch" class="form-input" placeholder="🔍 Buscar conversa ou contato..." oninput="renderChatList()" style="width:100%;margin-top:8px;"></div>
+        <div id="chtItems"></div></div>
+      <div class="cht-pane cht-conv" id="chtConv"></div></div>`;
+  }
+  renderChatList();
+  const w = _pt$('chtWrap'); if (w) w.classList.toggle('in-conv', !!_cv);
+  if (!_cv) _pt$('chtConv').innerHTML = `<div style="margin:auto;text-align:center;color:var(--muted);padding:24px;"><div style="font-size:46px;">💬</div><div style="font-weight:700;margin-top:6px;">Suas conversas</div><div style="font-size:13px;margin-top:4px;">Escolha uma conversa ao lado ou toque em “＋ Nova”.<br>Converse com seu personal, seus alunos e seus contatos.</div></div>`;
+}
+function renderChatList() {
+  const box = _pt$('chtItems'); if (!box) return;
+  const me = _meUid(), q = _ptNorm((_pt$('chtSearch') || {}).value || '');
+  const chats = _chatList().filter(c => !q || _ptNorm(_chatTitle(c)).includes(q));
+  const invites = _chatPending.filter(c => !q || _ptNorm(c.name || '').includes(q));
+  const reqs = _contactDocs.filter(c => c.status === 'pending' && c.requestedBy !== me);
+  const haveDirect = new Set(Object.values(_chats).filter(c => c.type === 'direct').map(c => c.members.find(u => u !== me)));
+  const free = ptContacts().filter(k => !haveDirect.has(k.uid) && (!q || _ptNorm(k.name).includes(q)));
+  const denied = _chatErr && (_chatErr.code === 'permission-denied' || /permission/i.test(_chatErr.message || ''));
+  let h = '';
+  if (denied) h += `<div style="padding:10px 12px;font-size:12px;color:#f59e0b;">⚠️ O Firebase negou o acesso ao chat. Publique as regras atualizadas do arquivo firestore.rules.</div>`;
+  h += reqs.map(c => { const o = c.uids.find(u => u !== me); return `<div class="cht-item" style="cursor:default;background:rgba(59,130,246,.08);">${_avatarHtml((c.names || {})[o], 40, '👋')}<div class="cht-it-main"><b>${_ptEsc((c.names || {})[o] || 'Alguém')}</b><div style="font-size:12px;color:var(--muted);">quer ser seu contato</div></div><button style="${_ptBtnP}padding:6px 10px;font-size:12px;" onclick="ptContactAnswer('${c.id}',true)">Aceitar</button><button style="${_ptBtn}padding:6px 10px;font-size:12px;" onclick="ptContactAnswer('${c.id}',false)">✕</button></div>`; }).join('');
+  h += invites.map(c => `<div class="cht-item" style="cursor:default;background:rgba(59,130,246,.08);">${_avatarHtml(c.name, 40, '👥')}<div class="cht-it-main"><b>${_ptEsc(c.name || 'Grupo')}</b><div style="font-size:12px;color:var(--muted);">convite para o grupo</div></div><button style="${_ptBtnP}padding:6px 10px;font-size:12px;" onclick="ptGroupAnswer('${c.id}',true)">Entrar</button><button style="${_ptBtn}padding:6px 10px;font-size:12px;" onclick="ptGroupAnswer('${c.id}',false)">✕</button></div>`).join('');
+  h += chats.map(c => {
+    const lm = c.lastMessage, un = (c.unread || {})[me] || 0, pre = lm ? ((lm.from === me ? 'Você: ' : (c.type === 'group' ? (lm.name || '') + ': ' : '')) + lm.text) : 'Sem mensagens ainda';
+    return `<div class="cht-item ${_cv && _cv.id === c.id ? 'sel' : ''}" onclick="ptChatOpen('${c.id}')">${_avatarHtml(_chatTitle(c), 44, c.type === 'group' ? '👥' : null)}<div class="cht-it-main"><div class="cht-it-top"><b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_ptEsc(_chatTitle(c))}</b><span class="cht-time">${lm ? _chatFmtTime(lm.ts) : ''}</span></div><div class="cht-it-sub"><span>${_ptEsc(pre)}</span>${un ? `<span style="background:var(--primary);color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:800;">${un > 9 ? '9+' : un}</span>` : ''}</div></div></div>`;
+  }).join('');
+  if (free.length) h += `<div class="cht-sec">Iniciar conversa</div>` + free.map(k => `<div class="cht-item" onclick="ptChatOpenDirect('${k.uid}')">${_avatarHtml(k.name, 40)}<div class="cht-it-main"><b>${_ptEsc(k.name)}</b><div style="font-size:12px;color:var(--muted);">${k.kind}</div></div><span style="color:var(--primary);font-size:20px;">💬</span></div>`).join('');
+  if (!chats.length && !invites.length && !reqs.length && !free.length) h += `<div style="padding:30px 16px;text-align:center;color:var(--muted);font-size:13px;">${q ? 'Nenhuma conversa encontrada.' : 'Nenhuma conversa ainda.<br>Toque em <b>＋ Nova</b> para adicionar um contato pelo e-mail, ou vincule-se a um personal em Config → Conexões.'}</div>`;
+  box.innerHTML = h;
+}
+
+// ── conversation ──
+function _cvClose(render) {
+  if (_cv && _cv.unsub) { try { _cv.unsub(); } catch (e) {} }
+  _cv = null; if (render) renderChatPage();
+}
+function ptChatBack() { _cvClose(true); }
+function ptChatOpen(id) {
+  if (!_fbOk()) return; ptChatStart();
+  const c = _chats[id]; if (!c) return;
+  _cvClose(false); const me = _meUid(), un = (c.unread || {})[me] || 0;
+  _cv = { id, virtual: false, msgs: [], legacy: [], limit: 100, unreadFrom: un ? ((c.reads || {})[me] || 0) : Infinity, msgsLoaded: false, unseen: 0, hasMore: false };
+  renderChatPage(); _cvBuild(); _cvSubscribe(); _cvLoadLegacy(c); ptCvMarkRead();   // page skeleton first, then the conversation pane
+}
+function ptChatOpenDirect(uid) {
+  if (!_fbOk()) return; ptChatStart();
+  const id = 'd_' + _cid2(_meUid(), uid);
+  if (_chats[id]) { ptChatOpen(id); return; }
+  if (!ptContacts().find(x => x.uid === uid)) { showToast('Esta pessoa ainda não é um contato'); return; }
+  _cvClose(false);
+  _cv = { id, virtual: true, other: uid, msgs: [], legacy: [], limit: 100, unreadFrom: Infinity, msgsLoaded: true, unseen: 0, hasMore: false };
+  renderChatPage(); _cvBuild(); _cvLoadLegacy(null);
+}
+function _cvBuild() {
+  const el = _pt$('chtConv'); if (!el) return;
+  el.innerHTML = `<div class="cht-head"><button class="cht-back" onclick="ptChatBack()" aria-label="Voltar">‹</button><div id="cvAvatar"></div><div style="min-width:0;flex:1;"><div id="cvTitle" style="font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div><div id="cvSub" style="font-size:12px;color:var(--muted);"></div></div><button style="${_ptBtn}padding:6px 10px;" onclick="ptCvInfo()" aria-label="Informações">ⓘ</button></div>
+    <div class="cht-msgs" id="cvMsgs"></div>
+    <button id="cvPill" onclick="ptCvToBottom()" style="display:none;position:absolute;left:50%;transform:translateX(-50%);bottom:74px;background:var(--primary);color:#fff;border:none;border-radius:16px;padding:7px 14px;font-size:12px;font-weight:800;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.5);"></button>
+    <div class="cht-compose"><textarea id="cvInput" rows="1" placeholder="Escreva uma mensagem…" onkeydown="ptCvKey(event)" oninput="ptCvAutoGrow(this)"></textarea><button style="${_ptBtnP}padding:11px 16px;font-size:16px;" onclick="ptCvSend()" aria-label="Enviar">➤</button></div>`;
+  _pt$('cvMsgs').onscroll = () => { const b = _pt$('cvMsgs'); if (b && b.scrollTop + b.clientHeight >= b.scrollHeight - 40) { if (_cv) _cv.unseen = 0; const p = _pt$('cvPill'); if (p) p.style.display = 'none'; ptCvMarkRead(); } };
+  _cvHeader(); renderConversation();
+}
+function _cvHeader() {
+  if (!_cv || !_pt$('cvTitle')) return;
+  const c = _chats[_cv.id];
+  if (c) { _pt$('cvTitle').textContent = _chatTitle(c); _pt$('cvSub').textContent = _chatSub(c); _pt$('cvAvatar').innerHTML = _avatarHtml(_chatTitle(c), 40, c.type === 'group' ? '👥' : null); }
+  else { const k = ptContacts().find(x => x.uid === _cv.other); _pt$('cvTitle').textContent = k ? k.name : 'Conversa'; _pt$('cvSub').textContent = k ? k.kind : ''; _pt$('cvAvatar').innerHTML = _avatarHtml(k ? k.name : '?', 40); }
+}
+function _cvSubscribe() {
+  if (!_cv || _cv.virtual) return;
+  const id = _cv.id, lim = _cv.limit;
+  if (_cv.unsub) { try { _cv.unsub(); } catch (e) {} }
+  _cv.unsub = FB.listen(['chats', id, 'messages'], [['orderBy', 'ts', 'desc'], ['limit', lim]], rows => {
+    if (!_cv || _cv.id !== id) return;
+    const prev = _cv.msgs.length ? _cv.msgs[_cv.msgs.length - 1].ts : 0, me = _meUid();
+    _cv.msgs = rows.map(r => ({ id: r.id, ...r.data })).sort((a, b) => a.ts - b.ts);
+    _cv.hasMore = rows.length >= lim;
+    _cv.gained = (_cv.msgsLoaded && prev) ? _cv.msgs.filter(m => m.ts > prev && m.from !== me).length : 0;
+    _cv.msgsLoaded = true; renderConversation(); ptCvMarkRead();
+  }, e => { _chatErr = e; renderConversation(); });
+}
+async function _cvLoadLegacy(c) {   // messages from the previous (v49) personal↔student chat
+  try {
+    const me = _meUid(), other = c ? c.members.find(u => u !== me) : _cv && _cv.other;
+    const l = _links.find(x => x.status === 'accepted' && ((x.personalUid === me && x.studentUid === other) || (x.studentUid === me && x.personalUid === other)));
+    if (!l || !_cv) return; const id = _cv.id;
+    const rows = await FB.listDocs('links', l.id, 'messages');
+    if (_cv && _cv.id === id) { _cv.legacy = rows.map(r => ({ id: 'old_' + r.id, ...r.data, legacy: true })); renderConversation(); }
+  } catch (e) { /* no legacy messages or no permission — ignore */ }
+}
+function _cvOnChat() {
+  if (!_cv) return;
+  if (_cv.virtual && _chats[_cv.id]) { _cv.virtual = false; _cvSubscribe(); }
+  _cvHeader(); renderConversation(); ptCvMarkRead();
+}
+function _msgTicks(m) {
+  const c = _chats[_cv.id]; if (!c) return '✓';
+  const others = c.members.filter(u => u !== _meUid());
+  return others.length && others.every(u => ((c.reads || {})[u] || 0) >= m.ts) ? '<span style="color:#93c5fd;">✓✓</span>' : '✓';
+}
+function renderConversation() {
+  const box = _pt$('cvMsgs'); if (!box || !_cv) return;
+  const me = _meUid(), c = _chats[_cv.id], group = c && c.type === 'group';
+  const atEnd = !box.dataset.init || box.scrollTop + box.clientHeight >= box.scrollHeight - 40, prevTop = box.scrollTop, prevFromBottom = box.scrollHeight - box.scrollTop;
+  const gained = _cv.gained || 0; _cv.gained = 0;     // consumed by exactly one render
+  const all = [..._cv.legacy, ..._cv.msgs].sort((a, b) => a.ts - b.ts);
+  let h = _cv.hasMore ? `<button style="${_ptBtn}align-self:center;padding:6px 12px;font-size:12px;" onclick="ptCvMore()">↑ Carregar mensagens anteriores</button>` : '', lastDay = '', newShown = false;
+  if (!all.length) h += `<div style="margin:auto;color:var(--muted);font-size:13px;text-align:center;">${_chatErr ? '⚠️ Não foi possível carregar as mensagens.' : 'Nenhuma mensagem ainda. Diga olá! 👋'}</div>`;
+  all.forEach(m => {
+    const day = _chatDayLabel(m.ts); if (day !== lastDay) { h += `<div class="cht-day">${day}</div>`; lastDay = day; }
+    if (!newShown && m.from !== me && m.ts > _cv.unreadFrom) { h += `<div class="cht-new">Novas mensagens</div>`; newShown = true; }
+    const mine = m.from === me;
+    h += `<div class="cht-row ${mine ? 'mine' : ''}"><div class="cht-bub ${mine ? 'mine' : ''}">${group && !mine ? `<div class="cht-who">${_ptEsc(m.name || '')}</div>` : ''}<div>${_ptEsc(m.text)}</div><div class="cht-meta">${new Date(m.ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}${mine ? ' ' + _msgTicks(m) : ''}${mine && !m.legacy ? `<span class="cht-del" onclick="ptCvDelete('${m.id}')" title="Apagar">🗑</span>` : ''}</div></div></div>`;
+  });
+  box.innerHTML = h; box.dataset.init = '1';
+  if (_cv.keepScroll) { box.scrollTop = box.scrollHeight - prevFromBottom; _cv.keepScroll = false; }
+  else if (atEnd || _cv.forceBottom) {                 // only follow the end if I was already there or I just sent something
+    box.scrollTop = box.scrollHeight; _cv.unseen = 0; _cv.forceBottom = false; const p = _pt$('cvPill'); if (p) p.style.display = 'none'; }
+  else {                                                // reading older messages: keep the position and show the notice
+    box.scrollTop = prevTop;
+    if (gained > 0) { _cv.unseen = (_cv.unseen || 0) + gained; const p = _pt$('cvPill'); if (p) { p.textContent = '⬇ ' + _cv.unseen + (_cv.unseen > 1 ? ' novas mensagens' : ' nova mensagem'); p.style.display = 'block'; } }
+  }
+}
+function ptCvToBottom() { const b = _pt$('cvMsgs'); if (b) { b.scrollTop = b.scrollHeight; } const p = _pt$('cvPill'); if (p) p.style.display = 'none'; if (_cv) _cv.unseen = 0; ptCvMarkRead(); }
+function ptCvMore() { if (!_cv) return; _cv.limit += 100; _cv.keepScroll = true; _cvSubscribe(); }
+function ptCvKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ptCvSend(); } }
+function ptCvAutoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(120, t.scrollHeight) + 'px'; }
+async function ptCvMarkRead() {
+  if (!_cv || _cv.virtual || _cv.marking || document.hidden) return;
+  const pg = _pt$('page-chat'); if (!pg || !pg.classList.contains('active')) return;
+  const c = _chats[_cv.id], me = _meUid(); if (!c) return;
+  const lm = c.lastMessage ? c.lastMessage.ts : 0;
+  if (!(((c.unread || {})[me]) > 0) && ((c.reads || {})[me] || 0) >= lm) return;
+  _cv.marking = true;
+  try { await FB.setDoc(FB.docRef('chats', _cv.id), { reads: { [me]: Math.max(Date.now(), lm) }, unread: { [me]: 0 } }, { merge: true }); }
+  catch (e) { console.warn('[WGym] mark read', e); } finally { if (_cv) _cv.marking = false; }
+}
+async function ptCvSend() {
+  const inp = _pt$('cvInput'); if (!inp || !_cv) return;
+  const text = inp.value.trim(); if (!text) return;
+  if (text.length > 2000) { showToast('Mensagem muito longa (máx. 2000 caracteres)'); return; }
+  inp.value = ''; ptCvAutoGrow(inp);
+  try {
+    const me = _me(); let c = _chats[_cv.id];
+    if (_cv.virtual) {                                   // first message of a direct chat creates it
+      const a = me.uid, b = _cv.other, m = a < b ? [a, b] : [b, a], nm = {}; nm[a] = me.name; nm[b] = _nameOf(b);
+      await FB.setDoc(FB.docRef('chats', _cv.id), { type: 'direct', members: m, pending: [], memberNames: nm, reads: {}, unread: {}, createdAt: Date.now(), updatedAt: Date.now() });
+      c = { id: _cv.id, type: 'direct', members: m, pending: [], memberNames: nm, reads: {}, unread: {} }; _chats[_cv.id] = c; _cv.virtual = false; _cvSubscribe();
+    }
+    const ts = Date.now(), mid = 'm' + ts + Math.random().toString(36).slice(2, 5), unread = {};
+    (c.members || []).forEach(u => { if (u !== me.uid) unread[u] = (((c.unread || {})[u]) || 0) + 1; });
+    _cv.forceBottom = true;
+    await FB.setDoc(FB.docRef('chats', _cv.id, 'messages', mid), { from: me.uid, name: me.name, text, ts });
+    await FB.setDoc(FB.docRef('chats', _cv.id), { lastMessage: { text: text.slice(0, 120), from: me.uid, name: me.name, ts }, updatedAt: ts, unread, reads: { [me.uid]: ts } }, { merge: true });
+  } catch (e) { inp.value = text; showToast(_explainErr(e) + ' [chat]', 6000); }
+}
+async function ptCvDelete(mid) {
+  if (!_cv || !confirm('Apagar esta mensagem para todos?')) return;
+  try { await FB.deleteDoc(FB.docRef('chats', _cv.id, 'messages', mid)); } catch (e) { showToast(_explainErr(e), 5000); }
+}
+
+// ── contacts, groups ──
+function openNewChatSheet() {
+  if (!_fbOk()) { _needLogin(); return; }
+  ptChatStart(); _ptOverlay('chtNew', '<div id="chtNewBody"></div>', 480, 10005); renderNewChatSheet();
+}
+function renderNewChatSheet() {
+  const body = _pt$('chtNewBody'); if (!body) return;
+  const me = _meUid(), contacts = ptContacts(), inc = _contactDocs.filter(c => c.status === 'pending' && c.requestedBy !== me), out = _contactDocs.filter(c => c.status === 'pending' && c.requestedBy === me);
+  const row = (name, sub, act) => `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--border);">${_avatarHtml(name, 38)}<div style="min-width:0;flex:1;"><div style="font-weight:700;">${_ptEsc(name)}</div><div style="font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;">${_ptEsc(sub)}</div></div><div style="display:flex;gap:6px;flex:none;">${act}</div></div>`;
+  const sec = (t, h) => h ? `<div style="margin-top:14px;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:800;">${t}</div>${h}` : '';
+  body.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-family:var(--font-display);font-size:20px;font-weight:800;text-transform:uppercase;">＋ Nova conversa</div><button style="${_ptBtn}" onclick="_ptClose('chtNew')">✕</button></div>
+    <div style="font-size:13px;color:var(--muted);margin:6px 0 10px;">Adicione outra pessoa pelo e-mail da conta dela. Quando ela aceitar, vocês podem conversar.</div>
+    <div style="display:flex;gap:8px;"><input id="chtAddEmail" class="form-input" type="email" placeholder="e-mail do contato" style="flex:1;" onkeydown="if(event.key==='Enter')ptAddContactFromInput()"><button style="${_ptBtnP}" onclick="ptAddContactFromInput()">Convidar</button></div>
+    ${sec('Convites recebidos', inc.map(c => { const o = c.uids.find(u => u !== me); return row((c.names || {})[o] || 'Alguém', (c.emails || {})[o] || '', `<button style="${_ptBtnP}padding:6px 10px;font-size:12px;" onclick="ptContactAnswer('${c.id}',true)">Aceitar</button><button style="${_ptBtn}padding:6px 10px;font-size:12px;" onclick="ptContactAnswer('${c.id}',false)">Recusar</button>`); }).join(''))}
+    ${sec('Convites enviados', out.map(c => { const o = c.uids.find(u => u !== me); return row((c.names || {})[o] || 'Alguém', 'aguardando aceite', `<button style="${_ptBtn}padding:6px 10px;font-size:12px;" onclick="ptContactAnswer('${c.id}',false)">Cancelar</button>`); }).join(''))}
+    ${sec('Seus contatos', contacts.map(k => row(k.name, k.kind + (k.email ? ' · ' + k.email : ''), `<button style="${_ptBtnP}padding:6px 10px;font-size:12px;" onclick="_ptClose('chtNew');ptChatOpenDirect('${k.uid}')">Conversar</button>`)).join('') || '<div style="font-size:13px;color:var(--muted);padding:8px 0;">Nenhum contato ainda.</div>')}
+    <button style="${_ptBtn}width:100%;margin-top:14px;padding:12px;" onclick="openNewGroupSheet()">👥 Criar grupo</button>`;
+}
+async function ptAddContactFromInput() { const i = _pt$('chtAddEmail'); if (!i) return; i.value = _ptFixEmail(i.value); if (await ptAddContact(i.value)) i.value = ''; }
+async function ptAddContact(raw) {
+  if (!_fbOk()) { _needLogin(); return false; }
+  const email = _ptFixEmail(raw);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showToast(/@[^.@]*$/.test(email) ? 'E-mail incompleto — falta o final (ex.: .com)?' : 'Digite um e-mail válido', 4500); return false; }
+  const me = _me(); if (email === me.email.toLowerCase()) { showToast('Esse é o seu próprio e-mail'); return false; }
+  let step = 'diretório';
+  try {
+    const snap = await FB.getDoc(FB.docRef('directory', _ptEmailKey(email)));
+    if (!snap.exists()) { showToast('Nenhuma conta com esse e-mail usa o Will Gym (ainda). A pessoa precisa abrir o app logada ao menos uma vez.', 6000); return false; }
+    const t = snap.data();
+    if (ptContacts().some(k => k.uid === t.uid)) { showToast('Vocês já são contatos'); return false; }
+    const id = _cid2(me.uid, t.uid), ex = _contactDocs.find(c => c.id === id);
+    if (ex) { showToast(ex.status === 'pending' ? (ex.requestedBy === me.uid ? 'Convite já enviado — aguarde o aceite' : 'Essa pessoa já te convidou — aceite na lista') : 'Vocês já são contatos', 5000); return false; }
+    step = 'criar contato';
+    const u = me.uid < t.uid ? [me.uid, t.uid] : [t.uid, me.uid];
+    await FB.setDoc(FB.docRef('contacts', id), { uids: u, names: { [me.uid]: me.name, [t.uid]: t.name }, emails: { [me.uid]: me.email.toLowerCase(), [t.uid]: t.email }, status: 'pending', requestedBy: me.uid, createdAt: Date.now() });
+    ptNotify(t.uid, 'contact_request', 'Convite de contato', me.name + ' quer ser seu contato no chat');
+    showToast('📨 Convite enviado para ' + (t.name || email)); return true;
+  } catch (e) { showToast(_explainErr(e) + ' [etapa: ' + step + ']', 7000); return false; }
+}
+async function ptContactAnswer(id, accept) {
+  const c = _contactDocs.find(x => x.id === id); if (!c) return; const other = c.uids.find(u => u !== _meUid());
+  try {
+    if (accept) { await FB.setDoc(FB.docRef('contacts', id), { status: 'accepted' }, { merge: true }); ptNotify(other, 'contact_accepted', 'Contato aceito', _me().name + ' aceitou seu convite de contato'); showToast('✅ Contato adicionado'); }
+    else await FB.deleteDoc(FB.docRef('contacts', id));
+  } catch (e) { showToast(_explainErr(e), 5000); }
+}
+function openNewGroupSheet() {
+  const contacts = ptContacts();
+  _ptOverlay('chtNewGroup', `<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-family:var(--font-display);font-size:20px;font-weight:800;text-transform:uppercase;">👥 Novo grupo</div><button style="${_ptBtn}" onclick="_ptClose('chtNewGroup')">✕</button></div>
+    <input id="grpName" class="form-input" placeholder="Nome do grupo (ex.: Turma das 7h)" maxlength="40" style="width:100%;margin:10px 0;">
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">Convide seus contatos — eles entram quando aceitarem.</div>
+    ${contacts.map(k => `<label style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border);cursor:pointer;"><input type="checkbox" class="grp-pick" value="${k.uid}"> ${_avatarHtml(k.name, 32)}<span style="flex:1;font-weight:600;">${_ptEsc(k.name)} <span style="color:var(--muted);font-size:12px;font-weight:500;">· ${k.kind}</span></span></label>`).join('') || '<div style="color:var(--muted);font-size:13px;padding:8px 0;">Adicione contatos primeiro.</div>'}
+    <button style="${_ptBtnP}width:100%;padding:13px;margin-top:12px;" onclick="ptCreateGroup()">Criar grupo</button>`, 480, 10006);
+}
+async function ptCreateGroup() {
+  const name = ((_pt$('grpName') || {}).value || '').trim(), picked = [...document.querySelectorAll('.grp-pick:checked')].map(x => x.value);
+  if (!name) { showToast('Dê um nome ao grupo'); return; } if (!picked.length) { showToast('Escolha pelo menos um contato'); return; }
+  if (picked.length > 30) { showToast('Máximo de 30 convidados'); return; }
+  const me = _me(), id = 'g_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), names = { [me.uid]: me.name }; picked.forEach(u => names[u] = _nameOf(u));
+  try {
+    await FB.setDoc(FB.docRef('chats', id), { type: 'group', name, members: [me.uid], pending: picked, memberNames: names, reads: {}, unread: {}, createdBy: me.uid, createdAt: Date.now(), updatedAt: Date.now() });
+    picked.forEach(u => ptNotify(u, 'group_invite', 'Convite para grupo', me.name + ' convidou você para o grupo "' + name + '"', { chatId: id }));
+    _ptClose('chtNewGroup'); _ptClose('chtNew'); showToast('👥 Grupo criado — convites enviados');
+    let n = 0; const t = setInterval(() => { if (_chats[id] || ++n > 25) { clearInterval(t); if (_chats[id]) ptChatOpen(id); } }, 150);
+  } catch (e) { showToast(_explainErr(e) + ' [grupo]', 6000); }
+}
+async function ptGroupAnswer(id, accept) {
+  const c = _chatPending.find(x => x.id === id); if (!c) return; const me = _meUid();
+  try {
+    if (accept) { await FB.setDoc(FB.docRef('chats', id), { members: [...c.members, me], pending: c.pending.filter(u => u !== me), updatedAt: Date.now() }, { merge: true }); showToast('👥 Você entrou no grupo ' + (c.name || '')); let n = 0; const t = setInterval(() => { if (_chats[id] || ++n > 25) { clearInterval(t); if (_chats[id]) ptChatOpen(id); } }, 150); }
+    else await FB.setDoc(FB.docRef('chats', id), { pending: c.pending.filter(u => u !== me) }, { merge: true });
+  } catch (e) { showToast('Não foi possível responder ao convite. Tente de novo. ' + _explainErr(e), 6000); }
+}
+function ptCvInfo() {
+  const c = _cv && _chats[_cv.id], me = _meUid();
+  if (!c) { const k = ptContacts().find(x => x.uid === (_cv && _cv.other)); if (k) _ptOverlay('cvInfo', `<div style="text-align:center;">${_avatarHtml(k.name, 64)}<div style="font-weight:800;font-size:18px;margin-top:8px;">${_ptEsc(k.name)}</div><div style="color:var(--muted);">${k.kind}${k.email ? ' · ' + _ptEsc(k.email) : ''}</div></div>`, 380, 10005); return; }
+  const nm = u => (u === me ? 'Você' : _nameOf(u));
+  if (c.type === 'group') {
+    _ptOverlay('cvInfo', `<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-family:var(--font-display);font-size:19px;font-weight:800;">👥 ${_ptEsc(c.name)}</div><button style="${_ptBtn}" onclick="_ptClose('cvInfo')">✕</button></div>
+      <div style="margin-top:12px;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:800;">Membros (${c.members.length})</div>
+      ${c.members.map(u => `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;">${_avatarHtml(nm(u), 32)}<span style="font-weight:600;">${_ptEsc(nm(u))}</span>${u === c.createdBy ? '<span style="color:var(--muted);font-size:11px;">criador</span>' : ''}</div>`).join('')}
+      ${(c.pending || []).length ? `<div style="margin-top:8px;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:800;">Convidados (aguardando)</div>` + c.pending.map(u => `<div style="padding:5px 0;color:var(--muted);">${_ptEsc((c.memberNames || {})[u] || nm(u))}</div>`).join('') : ''}
+      <div style="display:flex;gap:8px;margin-top:14px;"><button style="${_ptBtn}flex:1;" onclick="ptGroupInviteMore()">➕ Convidar</button><button style="${_ptBtn}flex:1;color:#ef4444;" onclick="ptGroupLeave()">🚪 Sair do grupo</button></div>`, 420, 10005);
+  } else {
+    const o = c.members.find(u => u !== me), k = ptContacts().find(x => x.uid === o);
+    _ptOverlay('cvInfo', `<div style="text-align:center;">${_avatarHtml(nm(o), 64)}<div style="font-weight:800;font-size:18px;margin-top:8px;">${_ptEsc(nm(o))}</div><div style="color:var(--muted);">${k ? k.kind + (k.email ? ' · ' + _ptEsc(k.email) : '') : ''}</div></div>`, 380, 10005);
+  }
+}
+function ptGroupInviteMore() {
+  const c = _cv && _chats[_cv.id]; if (!c) return;
+  const free = ptContacts().filter(k => !c.members.includes(k.uid) && !(c.pending || []).includes(k.uid));
+  _ptClose('cvInfo');
+  _ptOverlay('cvInvite', `<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-family:var(--font-display);font-size:19px;font-weight:800;">➕ Convidar para ${_ptEsc(c.name)}</div><button style="${_ptBtn}" onclick="_ptClose('cvInvite')">✕</button></div>
+    ${free.map(k => `<label style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border);cursor:pointer;"><input type="checkbox" class="inv-pick" value="${k.uid}"> ${_avatarHtml(k.name, 32)}<span style="font-weight:600;">${_ptEsc(k.name)}</span></label>`).join('') || '<div style="color:var(--muted);padding:10px 0;">Todos os seus contatos já estão no grupo.</div>'}
+    ${free.length ? `<button style="${_ptBtnP}width:100%;padding:12px;margin-top:10px;" onclick="ptGroupInviteDo()">Enviar convites</button>` : ''}`, 420, 10006);
+}
+async function ptGroupInviteDo() {
+  const c = _cv && _chats[_cv.id], picked = [...document.querySelectorAll('.inv-pick:checked')].map(x => x.value); if (!c || !picked.length) return;
+  const names = {}; picked.forEach(u => names[u] = _nameOf(u));
+  try {
+    await FB.setDoc(FB.docRef('chats', c.id), { pending: [...(c.pending || []), ...picked], memberNames: names, updatedAt: Date.now() }, { merge: true });
+    picked.forEach(u => ptNotify(u, 'group_invite', 'Convite para grupo', _me().name + ' convidou você para o grupo "' + c.name + '"', { chatId: c.id }));
+    _ptClose('cvInvite'); showToast('📨 Convites enviados');
+  } catch (e) { showToast(_explainErr(e), 5000); }
+}
+async function ptGroupLeave() {
+  const c = _cv && _chats[_cv.id]; if (!c || !confirm('Sair do grupo "' + c.name + '"?')) return;
+  try { await FB.setDoc(FB.docRef('chats', c.id), { members: c.members.filter(u => u !== _meUid()), updatedAt: Date.now() }, { merge: true }); _ptClose('cvInfo'); _cvClose(true); showToast('Você saiu do grupo'); }
+  catch (e) { showToast(_explainErr(e), 5000); }
 }
 
 function syncStopButtons() {
@@ -6189,7 +6602,7 @@ function selectDashUser(id) { state.dashLinked = null; state.dashUserId=id; rend
 // ═══════════════════════════════════════════════════════
 // NAVIGATION
 // ═══════════════════════════════════════════════════════
-const PAGES = ['dashboard','treino','exercicio','historico','planos','configuracoes','personal'];
+const PAGES = ['dashboard','treino','exercicio','historico','planos','configuracoes','personal','chat'];
 function goPage(p, tabEl) {
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
@@ -6207,6 +6620,7 @@ function goPage(p, tabEl) {
   try { syncStopButtons(); } catch(e) {}
   try {
     applyPersonalMode();
+    if (p === 'chat') { ptChatStart(); renderChatPage(); const ct = _pt$('navChat'); if (ct && ct.scrollIntoView) ct.scrollIntoView({ inline: 'center', block: 'nearest' }); }
     if (p === 'personal') { renderPersonalPage(); ptRefreshAll(false); const nt = _pt$('navPersonal'); if (nt && nt.scrollIntoView) nt.scrollIntoView({ inline: 'center', block: 'nearest' }); }
     if (p === 'treino') { renderTrainerPlans(true); renderLinkedStudentCard(); refreshPlans().then(() => { renderTrainerPlans(true); renderLinkedStudentCard(); }); ptEnsureLinkedHist(); }
   } catch(e) { console.warn('[WGym] personal hooks', e); }

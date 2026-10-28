@@ -57,8 +57,16 @@ App web de registro e acompanhamento de treinos de musculação e aeróbicos, co
 - **Montador de treino** (vários dias, exercício, séries, reps, carga, descanso, recado). O aluno vê "🏅 Treino montado pelo personal *Nome*" e inicia com as metas pré-preenchidas.
 - **Treino de hoje:** o cartão sugere o próximo dia do treino (A → B → C…), mostra os exercícios, "Continuar treino (1/3)" e segue os exercícios montados.
 - **Alunos vinculados no Dashboard e na tela Treino do personal:** ver a evolução (somente leitura) e conduzir o treino montado pelo celular do personal. A sessão fica registrada no nome do aluno e é **entregue ao histórico do próprio aluno** (ver [fluxo](#fluxo-personal--aluno)).
-- **Recados** (chat simples) com divisor "Novas mensagens", pílula "⬇ N novas mensagens" e contadores de não lidas.
+- **Recados** com o personal/aluno agora vivem na aba **Chat** (abaixo); os botões 💬 do app abrem a conversa certa.
 - **Notificações 🔔** (sino no cabeçalho): convites, aceite/recusa, treino novo/atualizado, recados, **pedido de treino novo/atualização** (aluno → personal), aluno concluiu treino, treino registrado pelo personal.
+
+### Chat (aba 💬)
+- **Conversas em tempo real** (escuta do Firestore, sem recarregar): lista com última mensagem, hora e **contador de não lidas**; busca por conversa/contato.
+- **Quem pode conversar:** aluno ↔ personal (vínculo aceito), **aluno ↔ aluno** e qualquer pessoa que aceitou ser **contato** (convite por e-mail, com aceite).
+- **Grupos:** criados a partir dos contatos; quem é convidado vê o convite e **entra ao aceitar** (ou recusa). Qualquer membro pode convidar mais contatos ou sair do grupo.
+- **Conversa:** separador por dia, divisor **"Novas mensagens"**, pílula "⬇ N novas mensagens" quando você está lendo mensagens antigas, **✓ enviado / ✓✓ visto**, apagar a própria mensagem, "carregar mensagens anteriores" (100 por vez), Enter envia e Shift+Enter quebra linha.
+- **Avisos:** aviso na tela (e vibração) quando chega mensagem em outra conversa, selo no menu "Chat" e, com permissão, aviso do sistema com o app em segundo plano.
+- As mensagens do chat antigo entre personal e aluno continuam aparecendo no início da conversa.
 
 ---
 
@@ -133,7 +141,7 @@ Sempre que o `firestore.rules` mudar numa versão nova do app, publique-o novame
 
 ---
 
-## Fluxo Personal ↔ Aluno
+## Fluxo Personal ↔ Aluno e Chat
 
 ```mermaid
 sequenceDiagram
@@ -159,6 +167,7 @@ sequenceDiagram
 - Com vínculo aceito, o personal pode **ler apenas o histórico de treinos** do aluno (`users/{uid}/data/wgym_history`).
 - Sessões registradas no celular do personal usam um **atleta "espelho" local** (`lk_<uid>`, escondido das listas). Cada exercício concluído entra numa **fila local** (`wgym_session_outbox`) e é enviado quando houver conexão; o app do aluno importa para o histórico dele (como o atleta principal da conta), sem duplicar.
 - Os dados do aluno vinculado aparecem no Dashboard do personal em modo **somente leitura**.
+- **Chat:** a primeira mensagem de uma conversa direta cria o documento `chats/d_…`; cada envio grava a mensagem, atualiza `lastMessage`/`unread` e o recibo `reads` de quem enviou. Quem abre a conversa zera o próprio `unread` e grava o próprio `reads`. Contato entre alunos: `contacts/…` (pendente → aceito pelo destinatário) e só então a conversa pode ser criada.
 
 ---
 
@@ -171,7 +180,10 @@ sequenceDiagram
 | `users/{uid}/data/{chave}` | dados sincronizados do app (ver chaves abaixo) | só o dono; o personal vinculado lê apenas `wgym_history` |
 | `directory/{email}` | `uid`, `name`, `email`, `avatar`, `personal` — para encontrar alguém pelo e-mail exato | leitura: logado; escrita: o próprio |
 | `links/{personalUid_studentUid}` | `status` (`pending`/`accepted`), `requestedBy`, nomes e e-mails | as duas partes |
-| `links/{id}/messages/{id}` | recados (`from`, `text`, `ts`) | as duas partes |
+| `links/{id}/messages/{id}` | recados do chat antigo (somente leitura; aparecem no início da conversa) | as duas partes |
+| `contacts/{uidA_uidB}` | contato entre duas pessoas (`uids`, `names`, `emails`, `status`, `requestedBy`); id com os uids em ordem alfabética | as duas partes; só o destinatário aceita |
+| `chats/{d_uidA_uidB \| g_id}` | conversa (`type` direct/group, `members`, `pending` convidados, `memberNames`, `lastMessage`, `unread`, `reads`) | só membros (convidados leem o próprio convite) |
+| `chats/{id}/messages/{id}` | mensagens (`from`, `name`, `text` até 2000 caracteres, `ts`) | membros leem e enviam; só o autor apaga |
 | `plans/{id}` | treino montado (dias, exercícios, séries, reps, carga, descanso) | personal escreve; as duas partes leem |
 | `notifications/{id}` | `toUid`, `fromUid`, `type`, `title`, `body`, `ts`, `read` | cria quem tem vínculo; lê, marca como lida e apaga só o destinatário |
 | `sessions/{personalUid_studentUid_entryId}` | exercício registrado pelo personal para o aluno | personal cria (vínculo aceito); aluno importa e apaga |
@@ -193,6 +205,7 @@ Chaves sincronizadas em `users/{uid}/data`: `wgym_users`, `wgym_history`, `wgym_
 - Quem pediu o vínculo **não consegue se auto-aceitar**; só o destinatário aceita.
 - O personal lê **somente** `wgym_history` do aluno, e só com vínculo aceito. Avaliações e anotações do personal ficam na conta dele e não são visíveis ao aluno.
 - Fotos de treino **não** vão para a nuvem.
+- **Chat:** só membros leem e escrevem; conversa direta só é criada entre pessoas com contato/vínculo **aceito**; o recibo de leitura (`reads`) só pode ser alterado pela própria pessoa; grupos funcionam por **convite com aceite**; as consultas do chat não exigem índices compostos.
 - Recomendações: ative o **App Check** no Firebase e revise periodicamente os acessos na aba *Uso*.
 
 ---
@@ -204,6 +217,8 @@ Chaves sincronizadas em `users/{uid}/data`: `wgym_users`, `wgym_history`, `wgym_
 - Um exercício **editado ou apagado** no celular do personal depois de enviado ao aluno **não** é atualizado no histórico do aluno.
 - Se o aluno não tiver conta aberta há muito tempo, as sessões ficam aguardando na coleção `sessions` até ele abrir o app.
 - Uma sessão conduzida pelo personal é gravada no histórico do aluno como o **atleta principal da conta dele** (o perfil com o mesmo nome da conta, ou o primeiro).
+- **Grupos:** as regras não conseguem verificar, em lote, se quem convida tem contato com cada convidado. O app só oferece contatos, mas um cliente modificado poderia convidar qualquer pessoa — ela vê o convite e pode recusar. Mensagens são só texto (sem imagens/arquivos).
+- O chat usa escuta em tempo real: com o app aberto o consumo de leituras do Firestore é baixo (só o que muda), mas contas com muitas conversas ativas podem se aproximar da cota gratuita do plano Spark.
 - Não há suíte de testes automatizados no repositório.
 
 ---
@@ -220,6 +235,7 @@ Chaves sincronizadas em `users/{uid}/data`: `wgym_users`, `wgym_history`, `wgym_
 | v48–v49 | Notificações (sino) e recados com contadores de não lidas |
 | v50–v51 | Alunos vinculados no Dashboard e na tela Treino; "Treino de hoje" com início e continuação dos exercícios montados |
 | v52 | Sessões registradas pelo personal são entregues ao histórico do aluno (novas regras `sessions`) |
+| v53 | **Aba Chat:** conversas em tempo real (aluno↔personal, aluno↔aluno, grupos com convite), contatos por e-mail, não lidas, ✓✓ visto, apagar mensagem; novas regras `chats` e `contacts` |
 
 ---
 
