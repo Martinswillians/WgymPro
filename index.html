@@ -12,7 +12,9 @@
 <meta name="apple-mobile-web-app-title" content="Will Gym">
 <meta name="theme-color" content="#FF3D25">
 <meta name="description" content="Will Gym — Seu treino, sua evolução">
-<link rel="manifest" href="data:application/json,{&quot;name&quot;:&quot;Will Gym&quot;,&quot;short_name&quot;:&quot;WillGym&quot;,&quot;start_url&quot;:&quot;.&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;%230D0D0F&quot;,&quot;theme_color&quot;:&quot;%23FF3D25&quot;,&quot;icons&quot;:[{&quot;src&quot;:&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23FF3D25'/%3E%3Ctext y='.9em' font-size='80' x='10'%3E🏋️%3C/text%3E%3C/svg%3E&quot;,&quot;sizes&quot;:&quot;any&quot;,&quot;type&quot;:&quot;image/svg+xml&quot;}]}">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Will Gym</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -2097,24 +2099,21 @@ select.form-input option { background: var(--card2); color: var(--text); }
 @media(max-width:760px){.cht{grid-template-columns:1fr;height:calc(100vh - 150px);}.cht.in-conv .cht-list{display:none;}.cht:not(.in-conv) .cht-conv{display:none;}.cht-back{display:inline-flex;}}
 </style>
 
-  <!-- Service Worker cleanup — see note below -->
+  <!-- PWA — service worker mínimo (sw.js): só cache de navegação; workers antigos/estranhos são removidos. Desativar: abrir com ?nosw -->
   <script>
-  (function() {
-    if (!('serviceWorker' in navigator)) return;
-    // NOTE: Service Workers cannot be registered from a blob: URL in any
-    // modern browser (it's a spec-level same-origin restriction) — every
-    // previous attempt to do so here always failed silently into a .catch.
-    // The real risk is a Service Worker registered by an OLDER version of
-    // this app (before this was understood) still being active in the
-    // person's browser, controlling fetches/navigation for this origin —
-    // which can produce exactly the kind of unexpected blank pages / 404s
-    // seen when logging in. We actively unregister any such leftover SW
-    // here instead of trying (and failing) to register a new blob one.
-    navigator.serviceWorker.getRegistrations().then(regs => {
-      regs.forEach(reg => {
-        reg.unregister().then(() => console.log('[WGym] Removed stale Service Worker:', reg.scope));
-      });
-    }).catch(() => {});
+  (function () {
+    if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
+    var off = /[?&]nosw\b/.test(location.search);
+    function register() { navigator.serviceWorker.register('sw.js').catch(function () {}); }
+    navigator.serviceWorker.getRegistrations().then(function (regs) {
+      return Promise.all(regs.map(function (r) {
+        var u = ((r.active || r.waiting || r.installing || {}).scriptURL) || '';
+        if (off || !/\/sw\.js(\?|$)/.test(u)) return r.unregister();
+      }));
+    }).catch(function () {}).then(function () {
+      if (off) { if (window.caches) caches.keys().then(function (ks) { ks.forEach(function (k) { if (k.indexOf('wgym-shell-') === 0) caches.delete(k); }); }); return; }
+      if (document.readyState === 'complete') register(); else window.addEventListener('load', register);
+    });
   })();
   </script>
 
@@ -3002,8 +3001,16 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
     </div>
     <div class="settings-item" onclick="openLinksModal()">
-      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v53</div></div></div>
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v54</div></div></div>
       <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <div class="settings-section-title">Aplicativo</div>
+    <div class="settings-item" onclick="openInstallGuide()">
+      <div class="si-left"><div class="si-icon">⬇️</div><div><div class="si-label">Instalar o app</div><div class="si-sub">Botão “Instalar agora” e passo a passo<span id="instState"></span></div></div></div>
+      <div class="si-right" style="font-size:20px;color:var(--muted);">›</div>
     </div>
   </div>
 
@@ -3213,19 +3220,6 @@ select.form-input option { background: var(--card2); color: var(--text); }
     <div class="btn-row">
       <button class="btn btn-primary" style="margin-top:0;" onclick="openQRShare()">📱 Gerar QR Code</button>
       <button class="btn btn-outline" style="margin-top:0;" onclick="importFromQR()">📥 Importar QR</button>
-    </div>
-  </div>
-
-  <!-- PWA Install Banner -->
-  <div id="pwaBanner" class="card" style="display:none; background:linear-gradient(135deg,var(--primary),var(--primary-dark)); color:white; margin-bottom:10px;">
-    <div style="display:flex;align-items:center;gap:12px;">
-      <span style="font-size:28px;">📲</span>
-      <div style="flex:1;">
-        <div style="font-family:var(--font-display);font-size:16px;font-weight:800;">Instalar Will Gym</div>
-        <div style="font-size:11px;opacity:0.85;margin-top:2px;">Use como app nativo no seu celular!</div>
-      </div>
-      <button id="pwaInstallBtn" onclick="installPWA()" style="background:white;color:var(--primary);border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">Instalar</button>
-      <button onclick="document.getElementById('pwaBanner').style.display='none'" style="background:rgba(255,255,255,0.2);border:none;color:white;width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:14px;">✕</button>
     </div>
   </div>
 
@@ -3849,9 +3843,7 @@ function openAppShareModal() {
         </div>
         <button style="${btn}" onclick="closeAppShareModal()">Fechar</button>
       </div>
-      <div style="font-size:11px;color:var(--muted);margin-top:12px;line-height:1.5;">
-        <b>Para instalar:</b> iPhone → abra no Safari → Compartilhar → Adicionar à Tela de Início.<br>Android → menu ⋮ → Instalar app.
-      </div>
+      <button style="${btn}margin-top:12px;" onclick="closeAppShareModal();openInstallGuide()">📲 Como instalar o app</button>
     </div>`;
   document.body.appendChild(o);
   try { _drawQR(document.getElementById('appShareQr'), url, 780); }
@@ -3889,6 +3881,7 @@ function saveTrainerData() {
 }
 function applyPersonalMode() {
   const on = _isPersonal();
+  const _is = _pt$('instState'); if (_is) _is.textContent = _emApp() ? ' · ✓ instalado neste aparelho' : '';
   const ct = _pt$('navChat'); if (ct) ct.style.display = _fbOk() ? '' : 'none';                       // chat needs an account
   if (_fbOk() && _chatUid !== _fbUser.uid) { try { ptChatStart(); } catch (e) { console.warn('[WGym] chat start', e); } }
   const t = _pt$('navPersonal'); if (t) t.style.display = on ? '' : 'none';
@@ -4053,7 +4046,7 @@ function renderLinksModal() {
     ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
     ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
     ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
-    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v53</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v54</div>`;
 }
 async function ptSendFromInput() {
   const inp = _pt$('ptLinkEmail'); if (!inp) return;
@@ -5083,6 +5076,83 @@ async function ptGroupLeave() {
   try { await FB.setDoc(FB.docRef('chats', c.id), { members: c.members.filter(u => u !== _meUid()), updatedAt: Date.now() }, { merge: true }); _ptClose('cvInfo'); _cvClose(true); showToast('Você saiu do grupo'); }
   catch (e) { showToast(_explainErr(e), 5000); }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// v54 — INSTALAR O APP (PWA)
+//  • botão "Instalar agora" (quando o navegador permite) + passo a passo por plataforma (iPhone, Android, computador)
+//  • aviso dispensável por 7 dias em celulares; atalhos em Config e no QR code
+//  Requisitos de instalação (arquivos na raiz, junto do index.html): manifest.webmanifest, sw.js, icon-192/512.png
+// ═══════════════════════════════════════════════════════════════════
+function _ehIOS() { return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+function _ehAndroid() { return /Android/i.test(navigator.userAgent); }
+function _emApp() { try { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; } catch (e) { return false; } }
+const _instMsg = url => '🏋️ *Will Gym PRO*\n\nRegistre seus treinos, acompanhe sua evolução e converse com seu personal.\n\nAcesse e instale o app:\n' + url;
+function _instCard(title, mine, steps, extra) {
+  return [`<div style="${_ptCard}padding:16px;"><div style="font-weight:800;font-size:16px;margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${title}${mine ? '<span style="background:#f5a623;color:#2b1a00;font-size:10px;font-weight:800;border-radius:9px;padding:2px 8px;text-transform:uppercase;">seu aparelho</span>' : ''}</div><ol style="margin:0;padding-left:20px;line-height:1.55;font-size:14px;">${steps.map(i => `<li style="margin-bottom:6px;">${i}</li>`).join('')}</ol>${extra || ''}</div>`, mine];
+}
+function openInstallGuide() {
+  const ios = _ehIOS(), and = _ehAndroid(), url = _appUrl(), can = !!_pwaInstallEvent, installed = _emApp();
+  const go = `<div style="margin-top:12px;"><button style="${_ptBtnP}padding:11px 20px;font-size:14px;" onclick="instalarApp()">⬇️ Instalar agora</button></div>`;
+  const cIos = _instCard('iPhone (Safari)', ios, [
+    'Abra este site no <b>Safari</b>. Se o link abriu dentro do WhatsApp, toque em <b>Abrir no Safari</b> (ícone de bússola no canto inferior).',
+    'Toque no botão <b>Compartilhar</b> (um quadrado com uma seta para cima) na barra de baixo.',
+    'Role a lista e toque em <b>Adicionar à Tela de Início</b>.',
+    'Confirme em <b>Adicionar</b>. O ícone do Will Gym aparece na tela inicial.']);
+  const cAnd = _instCard('Android (Chrome)', and, [
+    'Abra este site no <b>Chrome</b>. Se o link abriu dentro do WhatsApp, toque em <b>⋮</b> e depois em <b>Abrir no Chrome</b>.',
+    'Toque no menu <b>⋮</b> (três pontinhos) no canto superior direito.',
+    'Toque em <b>Instalar aplicativo</b> (ou <b>Adicionar à tela inicial</b>).',
+    'Confirme em <b>Instalar</b>. O ícone aparece na tela inicial e na lista de aplicativos.'], can ? go : '');
+  const cPc = _instCard('Computador (Chrome ou Edge)', !ios && !and, [
+    'Abra o site no <b>Chrome</b> ou no <b>Edge</b>.',
+    'Clique no ícone de instalar (um monitor com uma seta) no fim da barra de endereço. Se não aparecer, abra o menu <b>⋮</b> do Chrome e escolha <b>Transmitir, salvar e compartilhar</b> e depois <b>Instalar página como aplicativo</b> (no Edge: <b>...</b> &gt; <b>Aplicativos</b> &gt; <b>Instalar este site como um aplicativo</b>).',
+    'Confirme em <b>Instalar</b>. O ícone é criado na área de trabalho e no menu Iniciar. Se quiser, fixe na barra de tarefas.'], can ? go : '');
+  const order = [cIos, cAnd, cPc].sort((a, b) => b[1] - a[1]).map(x => x[0]).join('');
+  const shIos = _instCard('No iPhone', ios, ['Toque em <b>Compartilhar no WhatsApp</b> acima, ou, no Safari, toque no botão <b>Compartilhar</b> (quadrado com seta).', 'Escolha <b>WhatsApp</b> na lista (ou <b>Copiar</b> e cole na conversa).', 'Selecione o contato ou o grupo e toque em <b>Enviar</b>.']);
+  const shAnd = _instCard('No Android', and, ['Toque em <b>Compartilhar no WhatsApp</b> acima, ou, no Chrome, toque em <b>⋮</b> e depois em <b>Compartilhar</b>.', 'Escolha <b>WhatsApp</b> na lista (ou <b>Copiar link</b> e cole na conversa).', 'Selecione o contato ou o grupo e toque em <b>Enviar</b>.']);
+  const shOrder = [shIos, shAnd].sort((a, b) => b[1] - a[1]).map(x => x[0]).join('');
+  const grid = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;';
+  _ptOverlay('instGuide', `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><div style="font-family:var(--font-display);font-size:24px;font-weight:800;text-transform:uppercase;">Instalar o app</div><button style="${_ptBtn}" onclick="_ptClose('instGuide')">✕</button></div>
+    <p style="font-size:14px;color:var(--muted);line-height:1.55;margin:8px 0 12px;">Instale o Will Gym na tela inicial do celular (ou na área de trabalho do computador) e abra com um toque, como um aplicativo, com o ícone do halter.</p>
+    ${installed ? `<div style="padding:12px 14px;border-radius:12px;background:rgba(46,204,113,.14);border:1px solid rgba(46,204,113,.45);font-weight:700;margin-bottom:12px;">✅ Você já está usando o app instalado.</div>` : ''}
+    ${(can && !installed) ? `<div style="margin-bottom:14px;"><button style="${_ptBtnP}padding:14px 26px;font-size:16px;" onclick="instalarApp()">⬇️ Instalar agora</button></div>` : (!installed ? `<div style="font-size:12px;color:var(--muted);margin-bottom:12px;">O botão “Instalar agora” aparece quando o navegador permite a instalação automática. Se não aparecer, siga os passos do seu aparelho abaixo.</div>` : '')}
+    <div style="${grid}">${order}</div>
+    <div style="font-family:var(--font-display);font-size:20px;font-weight:800;text-transform:uppercase;margin:24px 0 6px;">Compartilhar com os amigos</div>
+    <p style="font-size:14px;color:var(--muted);line-height:1.55;margin:0 0 10px;">Esta é a mensagem que será enviada:</p>
+    <div style="white-space:pre-wrap;background:rgba(46,204,113,.10);border:1px solid rgba(46,204,113,.35);border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.5;">${_ptEsc(_instMsg(url))}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 14px;"><a style="${_ptBtnP}background:#1fa855;text-decoration:none;display:inline-block;" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(_instMsg(url))}">Compartilhar no WhatsApp</a><button style="${_ptBtn}" onclick="appShareLink()">Compartilhar…</button><button style="${_ptBtn}" onclick="appCopyLink()">Copiar link</button><button style="${_ptBtn}" onclick="_ptClose('instGuide');openAppShareModal()">📱 Mostrar QR code</button></div>
+    <div style="${grid}">${shOrder}</div>`, 860, 10010);
+}
+async function instalarApp() {
+  if (!_pwaInstallEvent) { openInstallGuide(); return; }
+  const ev = _pwaInstallEvent; _pwaInstallEvent = null;
+  try { ev.prompt(); const r = await ev.userChoice; if (r && r.outcome === 'accepted') showToast('Instalando o app…'); else _pwaInstallEvent = ev; } catch (e) { _pwaInstallEvent = ev; }   // a dismissed prompt can't be reused in some browsers, but keep the guide usable
+  _instRemoveBar(); if (_pt$('instGuide')) openInstallGuide();
+}
+function installPWA() { instalarApp(); }   // compat with older buttons
+function _instRemoveBar() { const b = _pt$('instBar'); if (b) b.remove(); }
+function _instBarGo() { if (_pwaInstallEvent) return instalarApp(); _instRemoveBar(); openInstallGuide(); }
+function _instBarClose() { try { localStorage.setItem('wgym_inst_dismissed', Date.now()); } catch (e) {} _instRemoveBar(); }
+function _instShowBar() {
+  if (_emApp() || _pt$('instBar') || _pt$('instGuide') || !(_ehIOS() || _ehAndroid())) return;
+  let t = 0; try { t = +localStorage.getItem('wgym_inst_dismissed') || 0; } catch (e) {}
+  if (Date.now() - t < 7 * 864e5) return;
+  const d = document.createElement('div'); d.id = 'instBar';
+  d.style.cssText = 'position:fixed;left:10px;right:10px;bottom:12px;z-index:9000;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:14px;background:var(--card,#1a1a22);border:1.5px solid var(--primary);box-shadow:0 10px 30px rgba(0,0,0,.55);';
+  d.innerHTML = `<img src="icon-192.png" alt="" width="40" height="40" style="border-radius:10px;flex:none;" onerror="this.style.display='none'"><div style="flex:1;min-width:0;font-size:13px;line-height:1.35;"><b>Instale o app do Will Gym</b><br><small style="color:var(--muted);">Adicione o ícone à tela inicial do seu ${_ehIOS() ? 'iPhone' : 'celular'}.</small></div><button class="inst-go" style="${_ptBtnP}padding:8px 14px;" onclick="_instBarGo()">${_pwaInstallEvent ? 'Instalar' : 'Como instalar'}</button><button aria-label="Fechar aviso" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;padding:0 4px;" onclick="_instBarClose()">×</button>`;
+  document.body.appendChild(d);
+}
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); _pwaInstallEvent = e;
+  const b = _pt$('instBar'); if (b) { const g = b.querySelector('.inst-go'); if (g) g.textContent = 'Instalar'; } else _instShowBar();
+  if (_pt$('instGuide')) openInstallGuide();
+});
+window.addEventListener('appinstalled', () => {
+  _pwaInstallEvent = null; _instRemoveBar(); showToast('🎉 App instalado! Procure o ícone do Will Gym na sua tela inicial.', 6000);
+  if (_pt$('instGuide')) openInstallGuide();
+});
+setTimeout(_instShowBar, 2500);
 
 function syncStopButtons() {
   const on = !!state.activeTraining;
@@ -11457,42 +11527,9 @@ function scheduleNotifications() {
   }
 }
 
-// ─── PWA ───────────────────────────────────────────────
+// ─── PWA ─── (v54: install flow lives in the "INSTALAR O APP" block below)
 let _pwaInstallEvent = null;
-
-window.addEventListener('beforeinstallprompt', e => {
-  e.preventDefault();
-  _pwaInstallEvent = e;
-  const banner = document.getElementById('pwaBanner');
-  if (banner) banner.style.display = 'block';
-});
-
-window.addEventListener('appinstalled', () => {
-  const banner = document.getElementById('pwaBanner');
-  if (banner) banner.style.display = 'none';
-  showToast('🎉 Will Gym instalado com sucesso!');
-});
-
-function installPWA() {
-  if (!_pwaInstallEvent) {
-    showToast('Para instalar: use o menu do browser → "Adicionar à tela inicial"');
-    return;
-  }
-  _pwaInstallEvent.prompt();
-  _pwaInstallEvent.userChoice.then(r => {
-    if (r.outcome === 'accepted') showToast('🎉 Will Gym instalado!');
-    _pwaInstallEvent = null;
-    const banner = document.getElementById('pwaBanner');
-    if (banner) banner.style.display = 'none';
-  });
-}
-
-function checkPWA() {
-  if (_pwaInstallEvent) {
-    const banner = document.getElementById('pwaBanner');
-    if (banner) banner.style.display = 'block';
-  }
-}
+function checkPWA() {}
 
 // ─── UPDATE EXPORT/IMPORT TO INCLUDE PLANS ─────────────
 function _serializePlans() { return plans; }
@@ -11956,8 +11993,6 @@ function renderNotifUI() {
 }
 
 // ═══════════════════════════════════════════════════════
-// PWA — INSTALL PROMPT
-// ═══════════════════════════════════════════════════════
 // _pwaInstallEvent already declared above
 window.addEventListener('beforeinstallprompt', e => {
   e.preventDefault();
@@ -11986,12 +12021,7 @@ function installPWA() {
   });
 }
 
-// NOTE: a previous Service Worker registration attempt was removed from
-// here. Blob-based SW registration always fails (browsers require a real
-// same-origin URL for Service Workers), and a leftover/failed registration
-// was the likely cause of an intermittent navigation bug on login. Push
-// notification scheduling already has a working setInterval-based fallback
-// in scheduleNotifications() below that doesn't depend on a Service Worker.
+// Service worker: registered by the small <script> in <head> (sw.js); notifications keep the setInterval-based scheduling.
 
 // ═══════════════════════════════════════════════════════
 // PLANOS PAGE — RENDER ALL
