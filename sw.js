@@ -4,7 +4,7 @@
  *   • só intercepta NAVEGAÇÕES (GET) do próprio site — nunca Firebase, CDNs, imagens ou scripts de terceiros;
  *   • rede primeiro (sempre a versão mais nova quando online); a cópia guardada só serve se a rede falhar.
  * Para desativar o SW num aparelho: abra o app com  ?nosw  no endereço (ele se remove). */
-const CACHE = 'wgym-shell-v54';
+const CACHE = 'wgym-shell-v55';
 
 self.addEventListener('install', () => { self.skipWaiting(); });
 

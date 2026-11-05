@@ -48,6 +48,8 @@ App web de registro e acompanhamento de treinos de musculação e aeróbicos, co
 - Quando há **mais de um treino no mesmo dia**, o compartilhamento do dia permite escolher qual treino enviar.
 - **Compartilhar o app por QR code** (Config → Compartilhar o app); o gerador de QR é embutido e funciona offline.
 - Planos, templates rápidos, backup (exportar/importar JSON), tema escuro, meta semanal.
+- **Instalar o app** (Config → Instalar o app, atalho no QR code e aviso de 7 dias no celular): botão **"Instalar agora"** quando o navegador permite e passo a passo para iPhone (Safari), Android (Chrome) e computador (Chrome/Edge), com o cartão do seu aparelho em primeiro lugar e a mensagem pronta para compartilhar no WhatsApp.
+- **Telas estreitas:** layout testado de 360 a 480 px (inclui o Galaxy S24 Ultra, 384 px no Chrome): barra de abas rola por dentro, cabeçalho compacto durante o treino, áreas seguras (entalhe/barra de gestos) e barra de status que acompanha o tema.
 
 ### Modo Personal Trainer
 - Cadastro como **Aluno** ou **Personal Trainer** (e alternância em Config → Modo Personal Trainer).
@@ -89,7 +91,7 @@ App web de registro e acompanhamento de treinos de musculação e aeróbicos, co
 
 - **Sem build e sem dependências locais.** O Firebase é carregado por CDN (módulos ES).
 - **Offline-first nos dados:** tudo é gravado no `localStorage`; com conta, as chaves são sincronizadas com o Firestore.
-- **Instalável, mas sem service worker:** há `manifest` embutido (adicionar à tela inicial), porém o app **remove** service workers antigos e não registra nenhum. A página precisa de rede para carregar; depois de carregada, o registro de treinos funciona sem conexão e sincroniza quando voltar.
+- **PWA instalável:** `manifest.webmanifest`, ícones PNG e um `sw.js` **mínimo**. O service worker só trata a *navegação* do próprio site (rede primeiro; a cópia guardada só é usada se a rede falhar) e **nunca** intercepta Firebase, CDNs ou outros recursos. Com isso o app aparece com o botão "Instalar agora" e abre a página mesmo sem internet. Workers antigos ou de outra origem são removidos. Para desativar o service worker num aparelho, abra o app com `?nosw` no endereço.
 - **Visitante:** é possível usar sem conta (dados só no aparelho). Recursos de Personal, vínculos, notificações e recados exigem conta.
 
 ---
@@ -98,8 +100,14 @@ App web de registro e acompanhamento de treinos de musculação e aeróbicos, co
 
 ```
 .
-├── index.html        # o app (copie a versão mais recente, ex.: wgym_v52_sessions_to_student.html)
-├── firestore.rules   # regras de segurança do Firestore
+├── index.html              # o app (copie a versão mais recente, ex.: wgym_v55_responsive.html)
+├── manifest.webmanifest    # nome, cores e ícones do app instalado
+├── sw.js                   # service worker mínimo (cache de navegação)
+├── icon-192.png            # ícones do PWA
+├── icon-512.png
+├── icon-maskable-512.png
+├── apple-touch-icon.png    # ícone do iPhone (Adicionar à Tela de Início)
+├── firestore.rules         # regras de segurança do Firestore
 └── README.md
 ```
 
@@ -134,7 +142,7 @@ Sempre que o `firestore.rules` mudar numa versão nova do app, publique-o novame
 
 ## Publicar no GitHub Pages
 
-1. Coloque o app na raiz do repositório com o nome `index.html`.
+1. Coloque na raiz do repositório o app como `index.html` **junto com** `manifest.webmanifest`, `sw.js` e os quatro ícones PNG (sem eles o botão "Instalar agora" não aparece; as instruções manuais continuam valendo).
 2. **Settings → Pages →** *Deploy from a branch* → branch `main`, pasta `/ (root)`.
 3. Após a publicação, recarregue com `Ctrl+F5` (ou feche e reabra o app instalado) para pegar a versão nova.
 4. Confira a versão em **Config → Conexões personal ↔ aluno** (aparece "app vNN").
@@ -236,6 +244,8 @@ Chaves sincronizadas em `users/{uid}/data`: `wgym_users`, `wgym_history`, `wgym_
 | v50–v51 | Alunos vinculados no Dashboard e na tela Treino; "Treino de hoje" com início e continuação dos exercícios montados |
 | v52 | Sessões registradas pelo personal são entregues ao histórico do aluno (novas regras `sessions`) |
 | v53 | **Aba Chat:** conversas em tempo real (aluno↔personal, aluno↔aluno, grupos com convite), contatos por e-mail, não lidas, ✓✓ visto, apagar mensagem; novas regras `chats` e `contacts` |
+| v54 | **Instalar o app:** botão "Instalar agora", passo a passo por plataforma, aviso dispensável; PWA real (`manifest.webmanifest`, ícones PNG, `sw.js` mínimo) |
+| v55 | **Telas estreitas (S24 Ultra e similares):** abas rolam dentro da barra (a página não vaza mais para o lado), cabeçalho compacto, abas Alunos/Chat não deslocam a página, chat com altura real, áreas seguras e barra de status acompanhando o tema |
 
 ---
 

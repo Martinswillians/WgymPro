@@ -5,12 +5,12 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Will Gym">
-<meta name="theme-color" content="#FF3D25">
+<meta name="theme-color" content="#131316">
 <meta name="description" content="Will Gym — Seu treino, sua evolução">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
@@ -2097,6 +2097,41 @@ select.form-input option { background: var(--card2); color: var(--text); }
 .cht-compose{display:flex;gap:8px;padding:10px;border-top:1px solid var(--border);align-items:flex-end;}
 .cht-compose textarea{flex:1;resize:none;max-height:120px;min-height:42px;border-radius:12px;border:1.5px solid var(--border);background:var(--bg2);color:var(--text);padding:10px 12px;font-family:var(--font-body);font-size:14px;}
 @media(max-width:760px){.cht{grid-template-columns:1fr;height:calc(100vh - 150px);}.cht.in-conv .cht-list{display:none;}.cht:not(.in-conv) .cht-conv{display:none;}.cht-back{display:inline-flex;}}
+
+/* ══ v55 — layout seguro em telas estreitas (Galaxy S24 Ultra = 384 px no Chrome; 360 px; iPhone SE) ══ */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overscroll-behavior-y: contain; }   /* sem "puxar para atualizar" no meio do treino */
+body { min-height: 100vh; min-height: 100dvh; }
+img, canvas, video, svg { max-width: 100%; }
+.header { padding-top: calc(12px + env(safe-area-inset-top, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.header-top { gap: 8px; }
+.logo { min-width: 0; flex: 0 1 auto; }
+.header-right { flex: 0 0 auto; }
+/* abas: rolam DENTRO da barra (antes vazavam e a página inteira ganhava rolagem lateral) */
+.nav-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; margin: 0 -16px; padding: 0 16px; scroll-padding: 0 16px; }
+.nav-tabs::-webkit-scrollbar { display: none; }
+.nav-tab { flex: 1 0 auto; white-space: nowrap; padding-left: 10px; padding-right: 10px; }
+.toast { white-space: normal; max-width: calc(100vw - 24px); text-align: center; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+.page { padding-left: max(14px, env(safe-area-inset-left, 0px)); padding-right: max(14px, env(safe-area-inset-right, 0px)); padding-bottom: calc(90px + env(safe-area-inset-bottom, 0px)); }
+/* chat: altura real do cabeçalho (variável --hdr-h, medida em JS) */
+.cht { height: calc(100vh - var(--hdr-h, 150px) - 28px); height: calc(100dvh - var(--hdr-h, 150px) - 28px); min-height: 420px; }
+@media (max-width: 760px) { .cht { height: calc(100vh - var(--hdr-h, 150px) - 28px); height: calc(100dvh - var(--hdr-h, 150px) - 28px); } }
+@media (max-width: 430px) {
+  .header { padding-left: max(12px, env(safe-area-inset-left, 0px)); padding-right: max(12px, env(safe-area-inset-right, 0px)); }
+  .nav-tabs { margin: 0 -12px; padding: 0 12px; scroll-padding: 0 12px; }
+  .header-top { margin-bottom: 8px; }
+  .logo { font-size: 21px; }
+  .header-right { gap: 5px; }
+  .status-chip { font-size: 10px; padding: 3px 8px; white-space: nowrap; }
+  .hdr-btn { width: 30px; height: 30px; font-size: 14px; }
+  .hdr-user { width: 38px; height: 38px; font-size: 19px; }
+  .train-timer-header { font-size: 17px; letter-spacing: 1px; }
+  .nav-tab { padding-left: 8px; padding-right: 8px; letter-spacing: .4px; }
+  .page { padding-top: 12px; }
+}
+@media (max-width: 400px) {
+  .logo span:not(.w-letter) { display: none; }                 /* "Seu treino, sua evolução" — libera largura e altura */
+  body.is-training #trainStatus { display: none; }             /* durante o treino o cronômetro e o ■ já dizem tudo */
+}
 </style>
 
   <!-- PWA — service worker mínimo (sw.js): só cache de navegação; workers antigos/estranhos são removidos. Desativar: abrir com ?nosw -->
@@ -3001,7 +3036,7 @@ select.form-input option { background: var(--card2); color: var(--text); }
       <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
     </div>
     <div class="settings-item" onclick="openLinksModal()">
-      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v54</div></div></div>
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v55</div></div></div>
       <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
     </div>
   </div>
@@ -4046,7 +4081,7 @@ function renderLinksModal() {
     ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
     ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
     ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
-    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v54</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v55</div>`;
 }
 async function ptSendFromInput() {
   const inp = _pt$('ptLinkEmail'); if (!inp) return;
@@ -5139,7 +5174,7 @@ function _instShowBar() {
   let t = 0; try { t = +localStorage.getItem('wgym_inst_dismissed') || 0; } catch (e) {}
   if (Date.now() - t < 7 * 864e5) return;
   const d = document.createElement('div'); d.id = 'instBar';
-  d.style.cssText = 'position:fixed;left:10px;right:10px;bottom:12px;z-index:9000;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:14px;background:var(--card,#1a1a22);border:1.5px solid var(--primary);box-shadow:0 10px 30px rgba(0,0,0,.55);';
+  d.style.cssText = 'position:fixed;left:10px;right:10px;bottom:calc(12px + env(safe-area-inset-bottom, 0px));z-index:9000;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:14px;background:var(--card,#1a1a22);border:1.5px solid var(--primary);box-shadow:0 10px 30px rgba(0,0,0,.55);';
   d.innerHTML = `<img src="icon-192.png" alt="" width="40" height="40" style="border-radius:10px;flex:none;" onerror="this.style.display='none'"><div style="flex:1;min-width:0;font-size:13px;line-height:1.35;"><b>Instale o app do Will Gym</b><br><small style="color:var(--muted);">Adicione o ícone à tela inicial do seu ${_ehIOS() ? 'iPhone' : 'celular'}.</small></div><button class="inst-go" style="${_ptBtnP}padding:8px 14px;" onclick="_instBarGo()">${_pwaInstallEvent ? 'Instalar' : 'Como instalar'}</button><button aria-label="Fechar aviso" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;padding:0 4px;" onclick="_instBarClose()">×</button>`;
   document.body.appendChild(d);
 }
@@ -5154,8 +5189,29 @@ window.addEventListener('appinstalled', () => {
 });
 setTimeout(_instShowBar, 2500);
 
+// ═══ v55 — layout em telas estreitas ═══
+// Mostra a aba ativa DENTRO da barra de abas (scrollIntoView movia a página inteira para o lado)
+function _navReveal(tab) {
+  const nav = tab && tab.parentElement; if (!nav || nav.scrollWidth <= nav.clientWidth + 1) return;
+  const nr = nav.getBoundingClientRect(), tr = tab.getBoundingClientRect();
+  nav.scrollBy({ left: tr.left - nr.left - (nr.width - tr.width) / 2, behavior: 'smooth' });
+}
+// altura real do cabeçalho → CSS (--hdr-h); o cabeçalho muda de altura durante o treino e entre tamanhos de tela
+function _setHdrH() { const h = document.querySelector('.header'); if (h) document.documentElement.style.setProperty('--hdr-h', h.offsetHeight + 'px'); }
+// barra de status do Android / iOS acompanha o tema (antes: vermelho fixo)
+function _syncThemeColor() {
+  const c = getComputedStyle(document.documentElement).getPropertyValue('--bg2').trim(), m = document.querySelector('meta[name="theme-color"]');
+  if (m && c) m.setAttribute('content', c);
+}
+window.addEventListener('resize', _setHdrH); window.addEventListener('orientationchange', () => setTimeout(_setHdrH, 200));
+window.addEventListener('load', () => {
+  _setHdrH(); try { _syncThemeColor(); } catch (e) {} _navReveal(document.querySelector('.nav-tab.active'));
+  const h = document.querySelector('.header'); if (h && window.ResizeObserver) new ResizeObserver(_setHdrH).observe(h);
+});
+
 function syncStopButtons() {
   const on = !!state.activeTraining;
+  document.body.classList.toggle('is-training', on);
   const card = document.getElementById('exerciseCard');
   if (card) card.style.display = on ? 'block' : 'none';
   const sb = document.getElementById('stopTrainBtn');
@@ -5741,6 +5797,7 @@ try { users = JSON.parse(localStorage.getItem('wgym_users') || '[]'); } catch(e)
 // ═══════════════════════════════════════════════════════
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
+  try { _syncThemeColor(); } catch (e) {}
   settings.theme = t;
   const icons = { dark: '🌙', light: '☀️' };
   const labels = { dark: 'Tema Dark', light: 'Tema Light' };
@@ -6689,9 +6746,10 @@ function goPage(p, tabEl) {
   if (p==='planos') { renderPlanos(); }
   try { syncStopButtons(); } catch(e) {}
   try {
+    _navReveal(document.querySelector('.nav-tab.active')); _setHdrH();
     applyPersonalMode();
-    if (p === 'chat') { ptChatStart(); renderChatPage(); const ct = _pt$('navChat'); if (ct && ct.scrollIntoView) ct.scrollIntoView({ inline: 'center', block: 'nearest' }); }
-    if (p === 'personal') { renderPersonalPage(); ptRefreshAll(false); const nt = _pt$('navPersonal'); if (nt && nt.scrollIntoView) nt.scrollIntoView({ inline: 'center', block: 'nearest' }); }
+    if (p === 'chat') { ptChatStart(); renderChatPage(); }
+    if (p === 'personal') { renderPersonalPage(); ptRefreshAll(false); }
     if (p === 'treino') { renderTrainerPlans(true); renderLinkedStudentCard(); refreshPlans().then(() => { renderTrainerPlans(true); renderLinkedStudentCard(); }); ptEnsureLinkedHist(); }
   } catch(e) { console.warn('[WGym] personal hooks', e); }
   if (p === 'treino' && !window._lastModeApplied) {
