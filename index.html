@@ -2132,6 +2132,16 @@ img, canvas, video, svg { max-width: 100%; }
   .logo span:not(.w-letter) { display: none; }                 /* "Seu treino, sua evolução" — libera largura e altura */
   body.is-training #trainStatus { display: none; }             /* durante o treino o cronômetro e o ■ já dizem tudo */
 }
+
+.tm-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;}
+.tm-card{border:1.5px solid var(--border);border-left-width:5px;border-radius:var(--radius,14px);background:var(--bg2);padding:12px 14px;text-align:center;}
+.tm-card.work{background:var(--primary-light);}
+.tm-card.rest{background:rgba(59,130,246,.12);}
+.tm-card.timed-alert{animation:timedFlash .5s ease-in-out infinite;border-color:#FFB800;}
+.tm-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:14px;}
+.tm-phase{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);}
+.tm-clock{font-size:38px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.15;margin:4px 0;color:var(--text);}
+.tm-sub{font-size:11px;color:var(--muted);margin-bottom:8px;min-height:14px;}
 </style>
 
   <!-- PWA — service worker mínimo (sw.js): só cache de navegação; workers antigos/estranhos são removidos. Desativar: abrir com ?nosw -->
@@ -2796,6 +2806,7 @@ img, canvas, video, svg { max-width: 100%; }
         <button class="btn btn-primary" id="timedMainBtn" onclick="timedMain()" style="width:100%;">▶ Iniciar série</button>
         <button class="btn" id="timedEndRestBtn" onclick="timedEndRest()" style="width:100%;margin-top:8px;display:none;background:transparent;border:1.5px solid #3b82f6;color:#3b82f6;">✓ Finalizar descanso</button>
       </div>
+      <div id="timedMulti" style="display:none;margin:12px 0;"></div>
       <div class="btn-row" id="stdLogRow"><button class="btn btn-primary" onclick="logSerie()">+ Registrar Série</button></div>
     </div>
     <div class="timer-box" id="timerBox">
@@ -3036,7 +3047,7 @@ img, canvas, video, svg { max-width: 100%; }
       <div class="si-right" id="personalModeState" style="font-size:13px;font-weight:700;color:var(--muted);">Desativado</div>
     </div>
     <div class="settings-item" onclick="openLinksModal()">
-      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v55</div></div></div>
+      <div class="si-left"><div class="si-icon">🤝</div><div><div class="si-label">Conexões personal ↔ aluno</div><div class="si-sub">Convide ou aceite por e-mail · app v56</div></div></div>
       <div class="si-right" style="font-size:20px;color:var(--muted);"><span id="linksBadge"></span> ›</div>
     </div>
   </div>
@@ -3388,6 +3399,7 @@ img, canvas, video, svg { max-width: 100%; }
         <div class="summary-meta"><div class="sm-val green" id="sumTimeWork">00:00</div><div class="sm-label">Exercitando</div></div>
         <div class="summary-meta"><div class="sm-val blue" id="sumTimeRest">00:00</div><div class="sm-label">Descanso</div></div>
       </div>
+      <div id="sumTimedPeople" style="display:none;margin:0 0 12px;padding:12px 14px;border:1px solid var(--border);border-radius:14px;background:var(--bg2);"></div>
       <div class="summary-prs" id="sumPRs">
         <div class="summary-prs-title">🥇 Novos Recordes Pessoais</div>
         <div class="summary-prs-list" id="sumPRList"></div>
@@ -3465,6 +3477,7 @@ img, canvas, video, svg { max-width: 100%; }
         <div class="dss-card"><div class="dss-val green" id="dsTimeWork">—</div><div class="dss-label">Exercitando</div></div>
         <div class="dss-card"><div class="dss-val gold" id="dsTimeRest">—</div><div class="dss-label">Descanso</div></div>
       </div>
+      <div id="dsTimePeople" style="display:none;margin-top:8px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;"></div>
       <div class="day-share-section">Exercícios realizados</div>
       <div class="day-share-ex-list" id="dayShareExList"></div>
       <div class="day-share-section">Compartilhar</div>
@@ -3617,7 +3630,7 @@ function setTimeStyle(m) {
   try { timedFinalizePhase(); } catch (e) {}   // never lose a running series when switching
   state.timeStyle = m;
   try { localStorage.setItem('wgym_time_style', m); } catch (e) {}
-  if (m !== 'timed') { state.tPhase = 'idle'; state.tStart = 0; }
+  if (m !== 'timed') { state.tPhase = 'idle'; state.tStart = 0; state.tMulti = {}; }
   _syncTimeStyleButtons();
   refreshTimedPanel();
   showToast(m === 'timed' ? '⏲️ Modo cronometrado: série e descanso medidos' : '⏱ Modo padrão');
@@ -3632,6 +3645,9 @@ function refreshTimedPanel() {
   // standard mode registers N series per tap — say so on the button so it is never a surprise
   const _sb = row && row.querySelector('button'), _sf = document.getElementById(aer ? 'aerobSeries' : 'series');
   if (_sb && _sf && document.activeElement !== _sf) { const N = parseInt(_sf.value) || 1; const t = N > 1 ? '+ Registrar ' + N + ' séries' : '+ Registrar Série'; if (_sb.textContent !== t) _sb.textContent = t; }
+  const mult = on ? _timedAthletes() : [];
+  const mp = document.getElementById('timedMulti'); if (mp) mp.style.display = mult.length ? 'block' : 'none';
+  if (mult.length) { panel.style.display = 'none'; _renderTimedMulti(mult); return; }
   if (!on) return;
   const ph = state.tPhase || 'idle';
   const el = ph === 'idle' ? 0 : (Date.now() - state.tStart) / 1000;
@@ -3750,6 +3766,12 @@ function timedEndRest() {
 // Closes whatever phase is running (called when concluding the exercise / switching style)
 function timedFinalizePhase() {
   if (state.timeStyle !== 'timed') return;
+  const _ath = _timedAthletes();
+  if (_ath.length) {                                   // dupla / trio / grupo: close each athlete's own phase
+    const t = Date.now();
+    _ath.forEach(a => { const tm = _tm(a.key); if (tm.phase === 'work') _timedRegisterAthlete(a, t); else if (tm.phase === 'rest') _timedCloseRestAthlete(a, t); tm.phase = 'idle'; tm.start = 0; });
+    state.tMulti = {}; return;
+  }
   const now = Date.now(), ph = state.tPhase;
   if (ph === 'work') _timedRegister(now);
   else if (ph === 'rest') _timedCloseRest(now);
@@ -3763,6 +3785,21 @@ function _sessionsTotalSec(entries) {
     if (!d) d = Math.round((Math.max(...list.map(h => new Date(h.date).getTime())) - new Date(start).getTime()) / 1000);
     return sum + (isFinite(d) && d > 0 ? d : 0);
   }, 0);
+}
+// time per athlete (dupla / trio / grupo): [{name, work, rest, series}] — empty for solo sessions
+function _timeByPlayer(entries) {
+  const seen = new Set(), by = {}, order = [];
+  (entries || []).forEach(h => (h.series || []).forEach(x => {
+    if (x.dur == null || !x.player) return;
+    const k = h.id + ':' + (x.tid || x.ts) + ':' + x.player; if (seen.has(k)) return; seen.add(k);
+    if (!by[x.player]) { by[x.player] = { name: x.player, work: 0, rest: 0, series: 0 }; order.push(x.player); }
+    by[x.player].work += x.dur || 0; by[x.player].rest += x.restDur || 0; by[x.player].series++;
+  }));
+  return order.map(n => by[n]);
+}
+function _timedPeopleHtml(bp, totalLabel) {
+  return `<div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:800;margin-bottom:6px;">⏱ Tempo por atleta${totalLabel ? ' · treino ' + totalLabel : ''}</div>` +
+    bp.map(p => `<div style="display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-top:1px solid var(--border);font-size:14px;"><b style="overflow:hidden;text-overflow:ellipsis;">${_ptEsc(p.name)}</b><span style="white-space:nowrap;">🔥 ${_fmtDur(p.work)} · 😮‍💨 ${_fmtDur(p.rest)}</span></div>`).join('');
 }
 function _timeTotals(entries) {
   const seen = new Set(); let work = 0, rest = 0, has = false;
@@ -4081,7 +4118,7 @@ function renderLinksModal() {
     ${sec('Enviadas — aguardando aceite', out.map(l => row(l, `<button style="${_ptBtn}" onclick="setLinkStatus('${l.id}','removed')">Cancelar</button>`)).join(''))}
     ${sec('Conectados', ok.map(l => row(l, `<button style="${_ptBtn}" onclick="openChat('${l.id}')">💬${_unreadBadge(ptUnreadMsgs(l.id))}</button><button style="${_ptBtn}" onclick="if(confirm('Remover este vínculo?'))setLinkStatus('${l.id}','removed')">Remover</button>`)).join(''))}
     ${(!inc.length && !out.length && !ok.length) ? '<div style="text-align:center;color:var(--muted);font-size:13px;padding:18px 0 4px;">Nenhuma conexão ainda.</div>' : ''}
-    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v55</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5;">Ao aceitar, o personal poderá ver o seu histórico de treinos e montar treinos para você. Qualquer um dos dois pode remover o vínculo a qualquer momento.<br>Will Gym PRO · versão v56</div>`;
 }
 async function ptSendFromInput() {
   const inp = _pt$('ptLinkEmail'); if (!inp) return;
@@ -5208,6 +5245,98 @@ window.addEventListener('load', () => {
   _setHdrH(); try { _syncThemeColor(); } catch (e) {} _navReveal(document.querySelector('.nav-tab.active'));
   const h = document.querySelector('.header'); if (h && window.ResizeObserver) new ResizeObserver(_setHdrH).observe(h);
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// v56 — CRONÔMETRO POR ATLETA (dupla, trio, grupo e "livre" com vários atletas)
+// Cada atleta tem o seu ciclo:  ▶ Iniciar série → 😮‍💨 Descanso (grava a série DELE, com o tempo dele) → ✓ Finalizar descanso / ▶ próxima série.
+// Estado: state.tMulti = { <chave>: { phase: 'idle'|'work'|'rest', start: ms, alerted, alertUntil } }
+// ═══════════════════════════════════════════════════════════════════
+const _TM_COLORS = ['var(--primary)', 'var(--blue)', 'var(--success)', 'var(--warning)', '#AA44FF', '#FF6B9D', '#00CED1', '#FF8C00'];
+function _timedAthletes() {
+  if (state.timeStyle !== 'timed' || !state.selectedEx || isAerobicExercise(state.selectedEx, state.group)) return [];
+  if (state.mode === 'partner') return [{ key: 'p1', name: state.p1name || 'Atleta 1', pre: 'p1', color: _TM_COLORS[0] }, { key: 'p2', name: state.p2name || 'Atleta 2', pre: 'p2', color: _TM_COLORS[1] }];
+  const freeMulti = state.mode === 'free' && state.freeUserIds && state.freeUserIds.length > 1;
+  if (state.mode === 'group' || freeMulti) {
+    const all = getActiveUsers(), ids = freeMulti ? state.freeUserIds : state.groupUserIds;
+    const members = (ids && ids.length ? ids.map(id => all.find(u => u.id === id)).filter(Boolean) : all);
+    if (members.length < 2) return [];
+    return members.map((u, i) => ({ key: 'g' + i, name: u.name, id: u.id, pre: 'gs' + i + '_', color: _TM_COLORS[i % _TM_COLORS.length] }));
+  }
+  return [];
+}
+function _tm(key) { state.tMulti = state.tMulti || {}; return state.tMulti[key] || (state.tMulti[key] = { phase: 'idle', start: 0 }); }
+const _tmField = (a, f) => { const e = document.getElementById(a.pre + f); return e ? e.value : ''; };
+function _timedRegisterAthlete(a, now) {
+  const tm = _tm(a.key), dur = Math.max(1, Math.round((now - tm.start) / 1000));
+  const reps = parseInt(_tmField(a, 'reps')) || 0, load = parseFloat(_tmField(a, 'load')) || 0, rest = parseInt(_tmField(a, 'rest')) || 60;
+  const num = state.currentSeries.filter(x => x.player === a.name).length + 1;
+  const serie = { serie: num, reps, load, rest, player: a.name, ts: now, dur, tid: 't' + now + a.key, restDur: 0 };
+  if (a.id) serie.userId = a.id;
+  state.currentSeries.push(serie);
+  try {                                                  // same per-athlete caches logSerie keeps
+    const data = { load, reps, rest };
+    if (a.key === 'p1') saveExerciseCache(state.selectedEx, data, state.activeP1Id || resolveActiveUid());
+    else if (a.key === 'p2') { if (state.activeP2Id) saveExerciseCache(state.selectedEx, data, state.activeP2Id); }
+    else if (a.id) saveExerciseCache(state.selectedEx, data, a.id);
+  } catch (e) { console.warn('[WGym] cache', e); }
+  renderSeriesLog(); saveActiveSession();
+  return true;
+}
+function _timedCloseRestAthlete(a, now) {
+  const tm = _tm(a.key), r = Math.round((now - tm.start) / 1000);
+  const last = [...state.currentSeries].reverse().find(x => x.player === a.name && x.tid);
+  if (last) state.currentSeries.forEach(x => { if (x.tid === last.tid) x.restDur = r; });
+}
+function timedAthleteMain(key) {
+  _initTimeStyle(); _unlockAudio();
+  const a = _timedAthletes().find(x => x.key === key); if (!a) return;
+  const tm = _tm(key), now = Date.now();
+  if (tm.phase === 'work') { _timedRegisterAthlete(a, now); tm.phase = 'rest'; tm.start = now; tm.alerted = 0; showToast('✓ ' + a.name + ': série registrada'); }
+  else { if (tm.phase === 'rest') _timedCloseRestAthlete(a, now); tm.phase = 'work'; tm.start = now; }
+  try { if (settings.vibration && navigator.vibrate) navigator.vibrate(60); } catch (e) {}
+  saveActiveSession(); refreshTimedPanel();
+}
+function timedAthleteEndRest(key) {
+  const a = _timedAthletes().find(x => x.key === key), tm = _tm(key); if (!a || tm.phase !== 'rest') return;
+  _timedCloseRestAthlete(a, Date.now()); tm.phase = 'idle'; tm.start = 0;
+  saveActiveSession(); refreshTimedPanel(); showToast('✓ ' + a.name + ': descanso finalizado');
+}
+function _athleteRestAlert(a, target, tm) {
+  tm.alertUntil = Date.now() + 5000;
+  try {
+    if (settings.vibration) {
+      if (navigator.vibrate) { const pat = []; for (let i = 0; i < 7; i++) pat.push(500, 200); navigator.vibrate(pat); }
+      else for (let i = 0; i < 5; i++) setTimeout(_beep, i * 1000);
+    }
+  } catch (e) {}
+  showToast('⏰ ' + a.name + ': descanso de ' + _fmtDur(target) + ' atingido — o tempo continua contando', 5000);
+}
+let _tmSig = '';
+function _renderTimedMulti(list) {
+  const box = document.getElementById('timedMulti'); if (!box) return;
+  const sig = list.map(a => a.key + ':' + a.name).join('|');
+  if (sig !== _tmSig || !box.firstChild) {              // rebuild only when the athletes change, so taps are never lost to a re-render
+    _tmSig = sig;
+    box.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">⏱ Cada atleta tem o seu cronômetro de série e de descanso</div><div class="tm-grid">` +
+      list.map(a => `<div class="tm-card" id="tmc_${a.key}" style="border-left-color:${a.color};"><div class="tm-head"><b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_ptEsc(a.name)}</b><span class="tm-phase" id="tmp_${a.key}"></span></div><div class="tm-clock" id="tmk_${a.key}">00:00</div><div class="tm-sub" id="tms_${a.key}"></div><button class="btn btn-primary" id="tmb_${a.key}" onclick="timedAthleteMain('${a.key}')" style="width:100%;"></button><button class="btn" id="tme_${a.key}" onclick="timedAthleteEndRest('${a.key}')" style="width:100%;margin-top:8px;display:none;background:transparent;border:1.5px solid #3b82f6;color:#3b82f6;">✓ Finalizar descanso</button></div>`).join('') + '</div>';
+  }
+  const now = Date.now();
+  list.forEach(a => {
+    const tm = _tm(a.key), ph = tm.phase, el = ph === 'idle' ? 0 : (now - tm.start) / 1000;
+    const restT = parseInt(_tmField(a, 'rest')) || 0;
+    if (ph === 'rest' && restT > 0 && el >= restT && tm.alerted !== tm.start) { tm.alerted = tm.start; if (el - restT < 10) _athleteRestAlert(a, restT, tm); }
+    const n = state.currentSeries.filter(x => x.player === a.name).length, tgt = parseInt(_tmField(a, 'series')) || 0;
+    const card = document.getElementById('tmc_' + a.key); if (!card) return;
+    card.className = 'tm-card' + (ph === 'idle' ? '' : ' ' + ph) + ((tm.alertUntil || 0) > now && ph === 'rest' ? ' timed-alert' : '');
+    document.getElementById('tmp_' + a.key).textContent = ph === 'work' ? '🔥 Série ' + (n + 1) + (tgt ? ' de ' + tgt : '') : ph === 'rest' ? '😮‍💨 Descansando' : 'Pronto';
+    document.getElementById('tmk_' + a.key).textContent = _fmtDur(el);
+    document.getElementById('tmb_' + a.key).textContent = ph === 'work' ? '😮‍💨 Descanso' : ph === 'rest' ? '▶ Próxima série' : '▶ Iniciar série';
+    document.getElementById('tme_' + a.key).style.display = ph === 'rest' ? 'block' : 'none';
+    document.getElementById('tms_' + a.key).textContent = ph === 'work' ? 'Toque em Descanso ao terminar'
+      : (tgt && n >= tgt ? '✓ ' + n + ' de ' + tgt + ' séries — meta concluída' : n ? 'Séries feitas: ' + n + (tgt ? ' de ' + tgt : '') : 'Meta: ' + (tgt || '—') + ' séries')
+        + (ph === 'rest' && restT > 0 ? ' · alvo ' + _fmtDur(restT) : '');
+  });
+}
 
 function syncStopButtons() {
   const on = !!state.activeTraining;
@@ -7985,7 +8114,7 @@ function getLastTrainedDate(groupName, userId) {
 // SELECT & FORM
 // ═══════════════════════════════════════════════════════
 function selectEx(ex) {
-  state.tPhase = 'idle'; state.tStart = 0;
+  state.tPhase = 'idle'; state.tStart = 0; state.tMulti = {};
   state.selectedEx=ex; state.currentSeries=[];
   renderGroupGrid(); stopTimer();
   document.getElementById('timerBox').classList.remove('show');
@@ -8825,7 +8954,7 @@ function skipToNextExercise() {
 
   // Discard current unsaved series
   state.currentSeries = [];
-  state.tPhase = 'idle'; state.tStart = 0;   // v41: also stops a running timed series/rest
+  state.tPhase = 'idle'; state.tStart = 0; state.tMulti = {};   // v41: also stops a running timed series/rest
   stopTimer();
   const timerBox = document.getElementById('timerBox');
   if (timerBox) timerBox.classList.remove('show');
@@ -9087,11 +9216,13 @@ function showTrainingSummary(entries, exCount, trainStart, group, uid) {
     totalVol, totalSeries, bestRM, bestRMEx, prs, exItems, kcal,
     trainStart: trainStart || new Date().toISOString()
   };
-  const _tt = _timeTotals(entries);
-  _trainingSummaryData.hasTimed = _tt.has; _trainingSummaryData.workSec = _tt.work; _trainingSummaryData.restSec = _tt.rest;
+  const _tt = _timeTotals(entries), _bp = _timeByPlayer(entries), _multiT = _bp.length >= 2;
+  _trainingSummaryData.hasTimed = _tt.has; _trainingSummaryData.workSec = _tt.work; _trainingSummaryData.restSec = _tt.rest; _trainingSummaryData.timedPeople = _multiT ? _bp : null;
+  const _tpp = document.getElementById('sumTimedPeople');
+  if (_tpp) { _tpp.style.display = (_tt.has && _multiT) ? 'block' : 'none'; _tpp.innerHTML = _multiT ? _timedPeopleHtml(_bp, durationStr) : ''; }
   const _trow = document.getElementById('sumTimedRow');
   if (_trow) {
-    _trow.style.display = _tt.has ? 'flex' : 'none';
+    _trow.style.display = (_tt.has && !_multiT) ? 'flex' : 'none';
     document.getElementById('sumTimeTotal').textContent = durationStr;
     document.getElementById('sumTimeWork').textContent = _fmtDur(_tt.work);
     document.getElementById('sumTimeRest').textContent = _fmtDur(_tt.rest);
@@ -9591,7 +9722,7 @@ function _timesStats(total, work, rest) {
 }
 function _summaryCardOpts() {
   const o = _summaryCardOptsBase(), d = _trainingSummaryData || {};
-  if (d.hasTimed) {
+  if (d.hasTimed && !d.timedPeople) {
     o.stats = [o.stats[1], ['🔢', String(d.totalSeries || 0), 'Séries'], o.stats[2]];   // Duração moves to the times row
     o.stats2 = _timesStats(d.durationStr, d.workSec, d.restSec);
   }
@@ -9600,7 +9731,7 @@ function _summaryCardOpts() {
 function _dayCardOpts(d) {
   const o = _dayCardOptsBase(d);
   o.title = d.dayLabel + (d.sessionLabel ? ' · ' + d.sessionLabel : '') + ' 🏆';
-  if (d.timed && d.timed.has) o.stats2 = _timesStats(d.timed.total, d.timed.work, d.timed.rest);
+  if (d.timed && d.timed.has && !(d.timed.people && d.timed.people.length >= 2)) o.stats2 = _timesStats(d.timed.total, d.timed.work, d.timed.rest);
   return o;
 }
 // "Gerar card" button in the summary: card + all photos
@@ -9633,7 +9764,7 @@ function buildTrainingSummaryText() {
     `• 🔢 Séries: ${d.totalSeries}`,
     `• 🔥 Kcal estimado: ~${d.kcal}`,
   ];
-  if (d.hasTimed) lines.push(`• ⏲️ Tempo total: ${d.durationStr}`, `• 🔥 Exercitando: ${_fmtDur(d.workSec)}`, `• 😮‍💨 Descanso: ${_fmtDur(d.restSec)}`);
+  if (d.hasTimed) { if (d.timedPeople) { lines.push(`• ⏲️ Tempo total: ${d.durationStr}`); d.timedPeople.forEach(p => lines.push(`• 👤 ${p.name} — 🔥 ${_fmtDur(p.work)} · 😮‍💨 ${_fmtDur(p.rest)}`)); } else lines.push(`• ⏲️ Tempo total: ${d.durationStr}`, `• 🔥 Exercitando: ${_fmtDur(d.workSec)}`, `• 😮‍💨 Descanso: ${_fmtDur(d.restSec)}`); }
   if (d.bestRM > 0) lines.push(`• 🏆 Melhor 1RM: ~${d.bestRM}kg (${d.bestRMEx})`);
   if (d.prs && d.prs.length > 0) {
     lines.push('', '🥇 *Recordes pessoais:*');
@@ -10073,7 +10204,7 @@ function computeDayShareData(dayKey, sessionKey) {
   _dayShareData = { dayKey, dayLabel, dateStr, entries, exItems, prs,
     totalVol, totalSeries, totalAerobMin, allAthletes, photos,
     sessions, sel, sessionLabel: selSession ? selSession.label : '', sessionTime: selSession ? selSession.time : '',
-    timed: { has: _tt.has, work: _tt.work, rest: _tt.rest, total: _sessionsTotalSec(entries) } };
+    timed: { has: _tt.has, work: _tt.work, rest: _tt.rest, total: _sessionsTotalSec(entries), people: _timeByPlayer(entries) } };
   return _dayShareData;
 }
 
@@ -10110,7 +10241,10 @@ function openDayShareModal(dayKey, evt, sessionKey) {
   }
   const _tm = _dayShareData.timed, _trow = document.getElementById('dsTimeRow');
   if (_trow) {
-    _trow.style.display = (_tm.total > 0 || _tm.has) ? 'flex' : 'none';
+    const _pe = _tm.people || [], _mu = _pe.length >= 2;
+    _trow.style.display = ((_tm.total > 0 || _tm.has) && !_mu) ? 'flex' : 'none';
+    const _dp = document.getElementById('dsTimePeople');
+    if (_dp) { _dp.style.display = (_tm.has && _mu) ? 'block' : 'none'; _dp.innerHTML = _mu ? _timedPeopleHtml(_pe, _tm.total > 0 ? _fmtDur(_tm.total) : '') : ''; }
     document.getElementById('dsTimeTotal').textContent = _tm.total > 0 ? _fmtDur(_tm.total) : '—';
     document.getElementById('dsTimeWork').textContent = _tm.has ? _fmtDur(_tm.work) : '—';
     document.getElementById('dsTimeRest').textContent = _tm.has ? _fmtDur(_tm.rest) : '—';
@@ -10160,7 +10294,7 @@ function buildDaySummaryText() {
     `• 🔢 Séries: ${d.totalSeries}`,
     d.totalAerobMin > 0 ? `• 🏃 Cardio: ${d.totalAerobMin}min` : '',
     ...(d.timed && d.timed.total > 0 ? [`• ⏱ Tempo total: ${_fmtDur(d.timed.total)}`] : []),
-    ...(d.timed && d.timed.has ? [`• 🔥 Exercitando: ${_fmtDur(d.timed.work)}`, `• 😮‍💨 Descanso: ${_fmtDur(d.timed.rest)}`] : []),
+    ...(d.timed && d.timed.has ? ((d.timed.people && d.timed.people.length >= 2) ? d.timed.people.map(p => `• 👤 ${p.name} — 🔥 ${_fmtDur(p.work)} · 😮‍💨 ${_fmtDur(p.rest)}`) : [`• 🔥 Exercitando: ${_fmtDur(d.timed.work)}`, `• 😮‍💨 Descanso: ${_fmtDur(d.timed.rest)}`]) : []),
   ].filter(l => l !== undefined);
 
   if (d.prs.length > 0) {
@@ -12700,6 +12834,7 @@ function saveActiveSession() {
     freeUserIds:   state.freeUserIds || [],
     tPhase:        state.tPhase || 'idle',
     tStart:        state.tStart || 0,
+    tMulti:        state.tMulti || {},
     page:          (document.querySelector('.page.active') || {}).id || null,
     // Recent history entries from this session (for context)
     sessionEntries: state.trainStart
@@ -12785,7 +12920,7 @@ function restoreSession() {
   state.activeP2Id      = snap.activeP2Id;
   state.groupUserIds    = snap.groupUserIds  || [];
   if (snap.freeUserIds && snap.freeUserIds.length) state.freeUserIds = snap.freeUserIds;
-  state.tPhase = snap.tPhase || 'idle'; state.tStart = snap.tStart || 0;
+  state.tPhase = snap.tPhase || 'idle'; state.tStart = snap.tStart || 0; state.tMulti = snap.tMulti || {};
 
   // The history is the source of truth for what is already done: rebuild
   // completedEx from it so nothing concluded ever appears as "pending".

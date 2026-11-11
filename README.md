@@ -35,6 +35,7 @@ App web de registro e acompanhamento de treinos de musculação e aeróbicos, co
 - **Monitoramento de tempo** (escolha na tela Treino, lembrada entre usos):
   - *Padrão:* registra a série e conta o descanso (contagem regressiva).
   - *Cronometrado:* ▶ Iniciar série → 😮‍💨 Descanso → ✓ Finalizar descanso / ▶ Próxima série. Cada ciclo registra **uma série** com o tempo medido; o campo "Séries" é a meta ("Série 2 de 4"). Funciona também em aeróbicos.
+  - **Dupla, trio, grupo e livre com vários atletas:** cada atleta tem o **seu próprio cronômetro** (um cartão por atleta, com os mesmos passos e o alerta de descanso individual). A série registrada é só a dele, com o tempo dele; o resumo e os compartilhamentos mostram **tempo exercitando e descansando por atleta**.
   - **Alerta de descanso:** ao atingir o descanso escolhido, o painel pisca e o aparelho vibra por 5 s (bipes no iOS, que não tem Vibration API); o cronômetro continua contando.
 - **Resumo do treino** com duração total, tempo exercitando e tempo de descanso, volume, séries, melhor 1RM e PRs.
 - **Cancelar exercício** (✕ no título e botão no rodapé) e **Encerrar treino** (botão do topo e do rodapé da tela Treino).
@@ -100,7 +101,7 @@ App web de registro e acompanhamento de treinos de musculação e aeróbicos, co
 
 ```
 .
-├── index.html              # o app (copie a versão mais recente, ex.: wgym_v55_responsive.html)
+├── index.html              # o app (copie a versão mais recente, ex.: wgym_v56_timer_per_athlete.html)
 ├── manifest.webmanifest    # nome, cores e ícones do app instalado
 ├── sw.js                   # service worker mínimo (cache de navegação)
 ├── icon-192.png            # ícones do PWA
@@ -246,6 +247,7 @@ Chaves sincronizadas em `users/{uid}/data`: `wgym_users`, `wgym_history`, `wgym_
 | v53 | **Aba Chat:** conversas em tempo real (aluno↔personal, aluno↔aluno, grupos com convite), contatos por e-mail, não lidas, ✓✓ visto, apagar mensagem; novas regras `chats` e `contacts` |
 | v54 | **Instalar o app:** botão "Instalar agora", passo a passo por plataforma, aviso dispensável; PWA real (`manifest.webmanifest`, ícones PNG, `sw.js` mínimo) |
 | v55 | **Telas estreitas (S24 Ultra e similares):** abas rolam dentro da barra (a página não vaza mais para o lado), cabeçalho compacto, abas Alunos/Chat não deslocam a página, chat com altura real, áreas seguras e barra de status acompanhando o tema |
+| v56 | **Cronômetro por atleta** em dupla, trio e grupo: cartão individual (série, descanso, alerta), série registrada só do atleta com o tempo dele, tempos por atleta no resumo, texto e compartilhamento do dia |
 
 ---
 
